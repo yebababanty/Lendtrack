@@ -32,28 +32,42 @@ function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function calcLoanSchedule(principal, interestRate, months, startDate) {
-  const monthlyInterest = (principal * interestRate) / 100;
-  const totalRepayable = principal + monthlyInterest * months;
-  const monthlyPayment = totalRepayable / months;
+// Returns only Mon–Fri dates starting the day after startDate
+function getWorkdays(startDate, count) {
+  const days = [];
+  const cursor = new Date(startDate);
+  cursor.setDate(cursor.getDate() + 1); // start from next day
+  while (days.length < count) {
+    const day = cursor.getDay(); // 0=Sun,6=Sat
+    if (day !== 0 && day !== 6) {
+      days.push(cursor.toISOString().split("T")[0]);
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+}
+
+function calcLoanSchedule(principal, interestRate, days, startDate) {
+  // interestRate is now a flat total % on principal (e.g. 15%)
+  const totalInterest = (principal * interestRate) / 100;
+  const totalRepayable = principal + totalInterest;
+  const dailyPayment = totalRepayable / days;
+  const workdays = getWorkdays(startDate, days);
   const schedule = [];
   let balance = totalRepayable;
-  const start = new Date(startDate);
-  for (let i = 1; i <= months; i++) {
-    const dueDate = new Date(start);
-    dueDate.setMonth(dueDate.getMonth() + i);
-    balance = Math.max(0, balance - monthlyPayment);
+  for (let i = 0; i < days; i++) {
+    balance = Math.max(0, balance - dailyPayment);
     schedule.push({
-      month: i,
-      dueDate: dueDate.toISOString().split("T")[0],
-      payment: monthlyPayment,
+      day: i + 1,
+      dueDate: workdays[i],
+      payment: dailyPayment,
       balance,
       paid: false,
       paidDate: null,
       paidAmount: 0,
     });
   }
-  return { monthlyPayment, totalRepayable, monthlyInterest, schedule };
+  return { dailyPayment, totalRepayable, totalInterest, schedule };
 }
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -163,7 +177,7 @@ export default function App() {
   // Form state
   const [newClient, setNewClient] = useState({ name:"", phone:"", address:"", idNumber:"" });
   const [newLoan, setNewLoan] = useState({
-    principal:"", interestRate:"10", months:"10",
+    principal:"", interestRate:"15", days:"30",
     startDate: new Date().toISOString().split("T")[0],
   });
 
@@ -228,19 +242,19 @@ export default function App() {
     if (!newLoan.principal || !selectedClientId) return;
     const p = parseFloat(newLoan.principal);
     const r = parseFloat(newLoan.interestRate);
-    const m = parseInt(newLoan.months);
-    const { monthlyPayment, totalRepayable, monthlyInterest, schedule } = calcLoanSchedule(p, r, m, newLoan.startDate);
+    const d = parseInt(newLoan.days);
+    const { dailyPayment, totalRepayable, totalInterest, schedule } = calcLoanSchedule(p, r, d, newLoan.startDate);
     const loan = {
-      id: generateId("LN"), principal: p, interestRate: r, months: m,
-      startDate: newLoan.startDate, monthlyPayment, totalRepayable,
-      monthlyInterest, schedule, status: "active",
+      id: generateId("LN"), principal: p, interestRate: r, days: d,
+      startDate: newLoan.startDate, dailyPayment, totalRepayable,
+      totalInterest, schedule, status: "active",
       issuedAt: new Date().toISOString(),
     };
     const updated = clients.map(c =>
       c.id === selectedClientId ? { ...c, loans: [...c.loans, loan] } : c
     );
     updateClients(updated);
-    setNewLoan({ principal:"", interestRate:"10", months:"10", startDate: new Date().toISOString().split("T")[0] });
+    setNewLoan({ principal:"", interestRate:"15", days:"30", startDate: new Date().toISOString().split("T")[0] });
     setShowAddLoan(false);
   };
 
@@ -513,11 +527,11 @@ export default function App() {
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:14}}>
                 {[
                   ["Principal", formatCurrency(activeLoan.principal), "#93c5fd"],
-                  ["Interest", activeLoan.interestRate+"% /mo", "#c4b5fd"],
-                  ["Monthly", formatCurrency(activeLoan.monthlyPayment), "#60a5fa"],
+                  ["Interest", activeLoan.interestRate+"% flat", "#c4b5fd"],
+                  ["Daily Pay", formatCurrency(activeLoan.dailyPayment), "#60a5fa"],
                   ["Total Due", formatCurrency(activeLoan.totalRepayable), "#e8f4fd"],
                   ["Balance", formatCurrency(activeLoan.schedule.find(s=>!s.paid)?.balance??0), "#f87171"],
-                  ["Progress", `${activeLoan.schedule.filter(s=>s.paid).length}/${activeLoan.months}`, "#4ade80"],
+                  ["Progress", `${activeLoan.schedule.filter(s=>s.paid).length}/${activeLoan.days} days`, "#4ade80"],
                 ].map(([l,v,color]) => (
                   <div key={l}>
                     <div style={{fontSize:9,color:"#3a5a70",marginBottom:3,letterSpacing:0.8}}>{l}</div>
@@ -528,7 +542,7 @@ export default function App() {
               <div style={{height:5,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden"}}>
                 <div style={{
                   height:"100%",borderRadius:4,
-                  width:`${(activeLoan.schedule.filter(s=>s.paid).length/activeLoan.months)*100}%`,
+                  width:`${(activeLoan.schedule.filter(s=>s.paid).length/activeLoan.days)*100}%`,
                   background:"linear-gradient(90deg,#22c55e,#4ade80)",
                   transition:"width 0.5s",
                 }}/>
@@ -567,11 +581,11 @@ export default function App() {
                           display:"flex",alignItems:"center",justifyContent:"center",
                           background:s.paid?"rgba(34,197,94,0.15)":isOverdue?"rgba(239,68,68,0.15)":"rgba(255,255,255,0.05)",
                           color:s.paid?"#4ade80":isOverdue?"#f87171":"#4a6880",
-                        }}>{s.paid?<Icon name="check" size={13}/>:`M${i+1}`}</div>
+                        }}>{s.paid?<Icon name="check" size={13}/>:`D${i+1}`}</div>
                         <div>
                           <div style={{display:"flex",alignItems:"center",gap:6}}>
                             <span style={{fontSize:13,fontWeight:600,color:s.paid?"#4ade80":isOverdue?"#f87171":"#c8dde8"}}>
-                              {formatCurrency(activeLoan.monthlyPayment)}
+                              {formatCurrency(activeLoan.dailyPayment)}
                             </span>
                             {isNext && <Badge color="#60a5fa" bg="rgba(96,165,250,0.12)">NEXT</Badge>}
                             {isOverdue && <Badge color="#f87171" bg="rgba(239,68,68,0.12)">OVERDUE</Badge>}
@@ -588,7 +602,7 @@ export default function App() {
                         {!s.paid && (
                           <button onClick={() => {
                             setShowPayment({clientId:c.id,loanId:activeLoan.id,scheduleIdx:i});
-                            setPaymentAmount(activeLoan.monthlyPayment.toFixed(2));
+                            setPaymentAmount(activeLoan.dailyPayment.toFixed(2));
                           }} style={{
                             background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",
                             color:"#000",padding:"4px 11px",borderRadius:7,cursor:"pointer",
@@ -732,9 +746,9 @@ export default function App() {
             background:"rgba(59,130,246,0.08)",border:"1px solid rgba(59,130,246,0.15)",
             borderRadius:9,padding:"9px 13px",marginBottom:16,fontSize:13,color:"#93c5fd",
           }}>Client: <strong>{selectedClient?.name}</strong></div>
-          <Field label="Principal Amount (₦) *"><input type="number" style={inputStyle} value={newLoan.principal} onChange={e=>setNewLoan(p=>({...p,principal:e.target.value}))} placeholder="e.g. 500000"/></Field>
-          <Field label="Monthly Interest Rate (%)"><input type="number" style={inputStyle} value={newLoan.interestRate} onChange={e=>setNewLoan(p=>({...p,interestRate:e.target.value}))}/></Field>
-          <Field label="Duration (Months)"><input type="number" style={inputStyle} value={newLoan.months} onChange={e=>setNewLoan(p=>({...p,months:e.target.value}))}/></Field>
+          <Field label="Principal Amount (₦) *"><input type="number" style={inputStyle} value={newLoan.principal} onChange={e=>setNewLoan(p=>({...p,principal:e.target.value}))} placeholder="e.g. 50000"/></Field>
+          <Field label="Interest Rate (% flat on principal)"><input type="number" style={inputStyle} value={newLoan.interestRate} onChange={e=>setNewLoan(p=>({...p,interestRate:e.target.value}))}/></Field>
+          <Field label="Duration (Working Days — Mon to Fri)"><input type="number" style={inputStyle} value={newLoan.days} onChange={e=>setNewLoan(p=>({...p,days:e.target.value}))} placeholder="e.g. 20"/></Field>
           <Field label="Start Date"><input type="date" style={inputStyle} value={newLoan.startDate} onChange={e=>setNewLoan(p=>({...p,startDate:e.target.value}))}/></Field>
           {newLoan.principal && (
             <div style={{
@@ -742,8 +756,19 @@ export default function App() {
               borderRadius:10,padding:"12px 14px",marginBottom:14,
               display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,
             }}>
-              <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>TOTAL REPAYABLE</div><div style={{color:"#4ade80",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{formatCurrency(newLoan.principal && newLoan.interestRate && newLoan.months ? (() => { const p=parseFloat(newLoan.principal)||0; const r=parseFloat(newLoan.interestRate)||0; const m=parseInt(newLoan.months)||1; return p+(p*r/100)*m; })() : 0)}</div></div>
-              <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>MONTHLY PAYMENT</div><div style={{color:"#60a5fa",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{formatCurrency(newLoan.principal && newLoan.interestRate && newLoan.months ? (() => { const p=parseFloat(newLoan.principal)||0; const r=parseFloat(newLoan.interestRate)||0; const m=parseInt(newLoan.months)||1; const total=p+(p*r/100)*m; return total/m; })() : 0)}</div></div>
+              {(() => {
+                const p=parseFloat(newLoan.principal)||0;
+                const r=parseFloat(newLoan.interestRate)||0;
+                const d=parseInt(newLoan.days)||1;
+                const total=p+(p*r/100);
+                const daily=total/d;
+                return (<>
+                  <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>TOTAL REPAYABLE</div><div style={{color:"#4ade80",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{formatCurrency(total)}</div></div>
+                  <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>DAILY PAYMENT</div><div style={{color:"#60a5fa",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{formatCurrency(daily)}</div></div>
+                  <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>INTEREST AMOUNT</div><div style={{color:"#c4b5fd",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{formatCurrency(p*r/100)}</div></div>
+                  <div><div style={{fontSize:10,color:"#3a5a70",marginBottom:3}}>WORKING DAYS</div><div style={{color:"#f59e0b",fontWeight:700,fontFamily:"'Courier New',monospace",fontSize:13}}>{d} days</div></div>
+                </>);
+              })()}
             </div>
           )}
           <button onClick={handleAddLoan} style={{
@@ -762,9 +787,9 @@ export default function App() {
             <div style={{textAlign:"center",marginBottom:20}}>
               <div style={{fontSize:12,color:"#3a5a70",marginBottom:4}}>Expected Amount</div>
               <div style={{fontSize:26,fontWeight:800,color:"#4ade80",fontFamily:"'Courier New',monospace"}}>
-                {formatCurrency(ln?.monthlyPayment||0)}
+                {formatCurrency(ln?.dailyPayment||0)}
               </div>
-              <div style={{fontSize:11,color:"#3a5a70",marginTop:4}}>Month {showPayment.scheduleIdx+1} of {ln?.months}</div>
+              <div style={{fontSize:11,color:"#3a5a70",marginTop:4}}>Day {showPayment.scheduleIdx+1} of {ln?.days} working days</div>
             </div>
             <Field label="Amount Received (₦)">
               <input type="number" style={inputStyle} value={paymentAmount}
