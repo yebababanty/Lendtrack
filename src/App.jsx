@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
 
-// ─── STORAGE HELPERS ──────────────────────────────────────────────────────────
+// ─── STORAGE HELPERS (localStorage — works on Vercel) ────────────────────────
 async function loadClients() {
   try {
-    const result = await window.storage.get("lendtrack_clients");
-    return result ? JSON.parse(result.value) : [];
+    const data = localStorage.getItem("creda_clients");
+    return data ? JSON.parse(data) : [];
   } catch {
     return [];
   }
@@ -12,10 +12,40 @@ async function loadClients() {
 
 async function saveClients(clients) {
   try {
-    await window.storage.set("lendtrack_clients", JSON.stringify(clients));
+    localStorage.setItem("creda_clients", JSON.stringify(clients));
+    // Also keep a timestamped backup
+    localStorage.setItem("creda_backup_" + new Date().toISOString().split("T")[0], JSON.stringify(clients));
   } catch (e) {
     console.error("Save failed:", e);
   }
+}
+
+function exportData(clients) {
+  const blob = new Blob([JSON.stringify(clients, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "creda_backup_" + new Date().toISOString().split("T")[0] + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(file, onSuccess) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (Array.isArray(data)) {
+        localStorage.setItem("creda_clients", JSON.stringify(data));
+        onSuccess(data);
+      } else {
+        alert("Invalid backup file.");
+      }
+    } catch {
+      alert("Could not read file. Make sure it is a valid CREDA backup.");
+    }
+  };
+  reader.readAsText(file);
 }
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -173,6 +203,7 @@ export default function App() {
   const [showPayment, setShowPayment] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Form state
   const [newClient, setNewClient] = useState({ name:"", phone:"", address:"", idNumber:"" });
@@ -679,17 +710,34 @@ export default function App() {
       }}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{
-            width:32,height:32,borderRadius:9,
-            background:"linear-gradient(135deg,#22c55e,#0ea5e9)",
-            display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
-          }}>💰</div>
+            width:36,height:36,borderRadius:10,
+            background:"linear-gradient(135deg,#0a5c36,#0d7a48)",
+            border:"1.5px solid rgba(200,146,10,0.4)",
+            display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+          }}>
+            <svg width="20" height="20" viewBox="0 0 80 80" fill="none">
+              <path d="M48 22A19 19 0 1 0 48 58" stroke="white" strokeWidth="5.5" strokeLinecap="round" fill="none"/>
+              <path d="M42 30L53 20L64 30" stroke="#c8920a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+              <line x1="53" y1="20" x2="53" y2="44" stroke="#c8920a" strokeWidth="4" strokeLinecap="round"/>
+            </svg>
+          </div>
           <div>
-            <div style={{fontSize:15,fontWeight:800,color:"#e8f4fd",letterSpacing:-0.3}}>LendTrack</div>
+            <div style={{display:"flex",flexDirection:"column",gap:0}}>
+              <div style={{fontSize:14,fontWeight:800,color:"#e8f4fd",letterSpacing:1,fontFamily:"serif"}}>CREDA</div>
+              <div style={{fontSize:8,color:"rgba(200,146,10,0.7)",letterSpacing:2,textTransform:"uppercase",lineHeight:1}}>Finance</div>
+            </div>
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
           {saving && <div style={{fontSize:11,color:"#3b82f6",display:"flex",alignItems:"center",gap:4}}><Icon name="cloud" size={12}/>Saving…</div>}
           {savedFlash && !saving && <div style={{fontSize:11,color:"#22c55e",display:"flex",alignItems:"center",gap:4}}><Icon name="check" size={12}/>Saved ✓</div>}
+          <button onClick={() => setShowSettings(true)} style={{
+            background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",
+            color:"#8ab4c8",width:30,height:30,borderRadius:8,cursor:"pointer",
+            display:"flex",alignItems:"center",justifyContent:"center",
+          }} title="Settings & Backup">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          </button>
         </div>
       </div>
 
@@ -802,6 +850,81 @@ export default function App() {
           </Modal>
         );
       })()}
+
+      {/* Settings & Backup Modal */}
+      {showSettings && (
+        <Modal title="⚙️ Settings & Backup" onClose={() => setShowSettings(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+            <div style={{background:"rgba(34,197,94,0.06)",border:"1px solid rgba(34,197,94,0.15)",borderRadius:10,padding:"12px 14px"}}>
+              <div style={{fontSize:12,color:"#4ade80",fontWeight:700,marginBottom:4}}>💾 Data Storage</div>
+              <div style={{fontSize:12,color:"#6b7a8d",lineHeight:1.5}}>Your data is saved on this device's browser storage. It stays safe even after closing the app — as long as you use the same browser on the same phone.</div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#8a9bb0",marginBottom:8,fontWeight:600}}>📤 EXPORT BACKUP</div>
+              <button onClick={() => { exportData(clients); setShowSettings(false); }} style={{
+                width:"100%",background:"linear-gradient(135deg,#22c55e,#16a34a)",border:"none",
+                color:"#000",padding:"11px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,
+              }}>Download Backup File (.json)</button>
+              <div style={{fontSize:11,color:"#4a5568",marginTop:5,textAlign:"center"}}>Save this file to Google Drive or WhatsApp yourself for safekeeping</div>
+            </div>
+
+            <div>
+              <div style={{fontSize:12,color:"#8a9bb0",marginBottom:8,fontWeight:600}}>📥 RESTORE FROM BACKUP</div>
+              <label style={{
+                display:"block",width:"100%",background:"rgba(96,165,250,0.1)",
+                border:"1px solid rgba(96,165,250,0.25)",
+                color:"#60a5fa",padding:"11px",borderRadius:10,cursor:"pointer",
+                fontWeight:700,fontSize:13,textAlign:"center",
+              }}>
+                Choose Backup File to Restore
+                <input type="file" accept=".json" style={{display:"none"}} onChange={(e) => {
+                  if (e.target.files[0]) {
+                    importData(e.target.files[0], (data) => {
+                      setClients(data);
+                      setShowSettings(false);
+                      alert("✅ Data restored successfully! " + data.length + " clients loaded.");
+                    });
+                  }
+                }}/>
+              </label>
+              <div style={{fontSize:11,color:"#4a5568",marginTop:5,textAlign:"center"}}>Only use .json files exported from this app</div>
+            </div>
+
+            <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",paddingTop:14}}>
+              <div style={{fontSize:12,color:"#8a9bb0",marginBottom:8,fontWeight:600}}>📊 STORAGE INFO</div>
+              <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6b7a8d",marginBottom:4}}>
+                  <span>Total Clients</span><span style={{color:"#fff",fontWeight:600}}>{clients.length}</span>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6b7a8d",marginBottom:4}}>
+                  <span>Active Loans</span><span style={{color:"#4ade80",fontWeight:600}}>{clients.reduce((a,c)=>a+(c.loans?.filter(l=>l.status==="active").length||0),0)}</span>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#6b7a8d"}}>
+                  <span>Data Size</span><span style={{color:"#60a5fa",fontWeight:600}}>{(JSON.stringify(clients).length / 1024).toFixed(1)} KB</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",paddingTop:14}}>
+              <div style={{fontSize:12,color:"#f87171",marginBottom:8,fontWeight:600}}>⚠️ DANGER ZONE</div>
+              <button onClick={() => {
+                if (window.confirm("Are you sure? This will DELETE ALL clients and loans permanently.")) {
+                  setClients([]);
+                  localStorage.removeItem("creda_clients");
+                  setShowSettings(false);
+                }
+              }} style={{
+                width:"100%",background:"rgba(248,113,113,0.1)",
+                border:"1px solid rgba(248,113,113,0.2)",
+                color:"#f87171",padding:"10px",borderRadius:10,cursor:"pointer",
+                fontWeight:600,fontSize:12,
+              }}>🗑️ Clear All Data</button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Confirm Delete Modal */}
       {confirmDelete && (
