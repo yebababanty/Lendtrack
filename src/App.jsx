@@ -837,6 +837,31 @@ export default function App(){
             ))}
           </div>
           <GBtn onClick={()=>{exportBackup();setMSettings(false);}} full style={{padding:"11px",marginBottom:10}}>📤 Download Full Backup (.json)</GBtn>
+          <div style={{marginBottom:10}}>
+            <label style={{display:"block",width:"100%",background:"rgba(96,165,250,0.1)",border:"1px solid rgba(96,165,250,0.25)",color:BLUE,padding:"11px",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,textAlign:"center",boxSizing:"border-box"}}>
+              📥 Restore From Backup (.json)
+              <input type="file" accept=".json" style={{display:"none"}} onChange={(e)=>{
+                if(e.target.files[0]){
+                  const reader=new FileReader();
+                  reader.onload=(ev)=>{
+                    try{
+                      const data=JSON.parse(ev.target.result);
+                      const c=data.clients||[];
+                      const m=data.monthly||data.monthlyRecords||{};
+                      const s=data.savings||data.savingsRecords||{};
+                      const u=data.users||DEFAULT_USERS;
+                      const p=data.pendingLoans||[];
+                      sc(c); sm(m); ss(s); su(u); sp(p);
+                      fbSet("clients",c); fbSet("monthly",m); fbSet("savings",s); fbSet("users",u); fbSet("pendingLoans",p);
+                      setMSettings(false);
+                      alert("✅ Data restored! "+c.length+" clients loaded into Firebase.");
+                    } catch(err){ alert("Could not read file: "+err.message); }
+                  };
+                  reader.readAsText(e.target.files[0]);
+                }
+              }}/>
+            </label>
+          </div>
           <button onClick={()=>{ if(window.confirm("DELETE ALL DATA from Firebase? This cannot be undone.")){ sc([]); sm({}); ss({}); sp([]); setMSettings(false); }}} style={{width:"100%",background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.2)",color:RED,padding:"10px",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:12}}>🗑️ Clear All Data from Firebase</button>
         </Modal>
       )}
