@@ -643,7 +643,6 @@ export default function App() {
   // ── FIREBASE LISTENERS ────────────────────────────────────────────────────
   useEffect(() => {
     // Force reset users with new credentials
-    fbSet("users", DEFAULT_USERS);
     const unsubs = [
       fbListen("clients", v => { setClients(v||[]); setSync("synced"); }),
       fbListen("users", v => setUsers(v||DEFAULT_USERS)),
