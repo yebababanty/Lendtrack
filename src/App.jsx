@@ -567,8 +567,6 @@ export default function App() {
   const today = new Date();
 
   useEffect(() => {
-    // Force reset users with new credentials — REMOVE after first login
-    fbSet("users", DEFAULT_USERS);
     const unsubs = [
       fbListen("clients", v => { setClients(v||[]); setSync("synced"); }),
       fbListen("users", v => setUsers(v||DEFAULT_USERS)),
