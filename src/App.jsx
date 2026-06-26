@@ -146,6 +146,121 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   return updated;
 }
 
+// ─── PRIORITY 4: LOAN RESTRUCTURE ENGINE ─────────────────────────────────────
+function restructureLoan(loan, newDailyAmount, reason, approvedBy) {
+  const unpaidSlots = loan.schedule.filter(s => !s.paid);
+  const totalUnpaidOwed = unpaidSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
+  const newDays = Math.ceil(totalUnpaidOwed / newDailyAmount);
+  const lastPaidDate = loan.schedule.filter(s => s.paid).slice(-1)[0]?.paidDate || loan.startDate;
+  const newRepayDays = getRepayDays(lastPaidDate, newDays, loan.excludeWeekends);
+  const paidSlots = loan.schedule.filter(s => s.paid);
+  const newSchedule = [...paidSlots];
+  let bal = totalUnpaidOwed;
+  for (let i = 0; i < newDays; i++) {
+    bal = Math.max(0, bal - newDailyAmount);
+    newSchedule.push({
+      day: paidSlots.length + i + 1,
+      dueDate: newRepayDays[i],
+      payment: newDailyAmount,
+      balance: bal,
+      paid: false,
+      paidDate: null,
+      paidAmount: 0,
+      overpayment: 0,
+      shortfall: 0,
+      paymentLog: [],
+      restructured: true
+    });
+  }
+  const newTotal = paidSlots.reduce((s, x) => s + x.paidAmount, 0) + totalUnpaidOwed;
+  return {
+    ...loan,
+    schedule: newSchedule,
+    days: newSchedule.length,
+    dailyPayment: newDailyAmount,
+    totalRepayable: newTotal,
+    restructureLog: [...(loan.restructureLog || []), {
+      date: todayStr,
+      reason,
+      approvedBy,
+      newDailyAmount,
+      newDays,
+      totalUnpaidOwed,
+      at: new Date().toISOString()
+    }]
+  };
+}
+
+// ─── PRIORITY 1: SHORTFALL CALCULATOR ────────────────────────────────────────
+function computeTotalShortfall(loan) {
+  const today = new Date();
+  let totalShortfall = 0;
+  let shortfallDays = 0;
+  (loan.schedule || []).forEach(s => {
+    if (!s.paid && s.paidAmount >= 0 && new Date(s.dueDate) <= today) {
+      const gap = s.payment - (s.paidAmount || 0);
+      if (gap > 0) {
+        totalShortfall += gap;
+        shortfallDays++;
+      }
+    }
+    if (s.shortfall > 0 && !s.paid) {
+      // already counted via above logic
+    }
+  });
+  // Also count partial paid days
+  (loan.schedule || []).forEach(s => {
+    if (!s.paid && s.paidAmount > 0 && s.paidAmount < s.payment) {
+      const gap = s.payment - s.paidAmount;
+      if (gap > 0 && new Date(s.dueDate) > today) {
+        totalShortfall += gap;
+        shortfallDays++;
+      }
+    }
+  });
+  return { totalShortfall, shortfallDays };
+}
+
+// ─── PRIORITY 2: RISK FLAG SYSTEM ────────────────────────────────────────────
+function computeClientRisk(client) {
+  const activeLoan = client.loans?.find(l => l.status === "active");
+  if (!activeLoan) return { level: "none", label: "No Loan", color: "#3a5a70", bg: "rgba(100,130,150,0.08)", emoji: "⚪" };
+  const today = new Date();
+  const schedule = activeLoan.schedule || [];
+  let consecutiveShortfalls = 0;
+  let maxConsecutive = 0;
+  let totalShortfallDays = 0;
+  let latePayments = 0;
+  let overdueCount = 0;
+
+  schedule.forEach(s => {
+    const due = new Date(s.dueDate);
+    if (!s.paid && due < today) {
+      overdueCount++;
+      consecutiveShortfalls++;
+      maxConsecutive = Math.max(maxConsecutive, consecutiveShortfalls);
+      totalShortfallDays++;
+    } else if (s.paid && s.paidDate > s.dueDate) {
+      latePayments++;
+      consecutiveShortfalls = 0;
+    } else if (!s.paid && s.paidAmount > 0 && s.paidAmount < s.payment) {
+      totalShortfallDays++;
+      consecutiveShortfalls++;
+      maxConsecutive = Math.max(maxConsecutive, consecutiveShortfalls);
+    } else if (s.paid) {
+      consecutiveShortfalls = 0;
+    }
+  });
+
+  if (maxConsecutive >= 3 || overdueCount >= 3) {
+    return { level: "red", label: "High Risk", color: "#ef4444", bg: "rgba(239,68,68,0.12)", emoji: "🔴" };
+  } else if (maxConsecutive >= 1 || latePayments >= 2 || totalShortfallDays >= 2) {
+    return { level: "amber", label: "Watch", color: "#f59e0b", bg: "rgba(245,158,11,0.12)", emoji: "🟡" };
+  } else {
+    return { level: "green", label: "On Track", color: "#22c55e", bg: "rgba(34,197,94,0.12)", emoji: "🟢" };
+  }
+}
+
 // ─── FINANCIAL ENGINES ───────────────────────────────────────────────────────
 function computeFinancials(clients) {
   let totalCapital = 0, totalExpectedInterest = 0, interestEarned = 0, principalCollected = 0, totalCollected = 0;
@@ -168,10 +283,7 @@ function computeFinancials(clients) {
     });
   });
   return {
-    totalCapital,
-    totalExpectedInterest,
-    interestEarned,
-    principalCollected,
+    totalCapital, totalExpectedInterest, interestEarned, principalCollected,
     outstandingPrincipal: Math.max(0, totalCapital - principalCollected),
     trueProfit: interestEarned,
     realROI: totalCapital > 0 ? (interestEarned / totalCapital) * 100 : 0,
@@ -199,10 +311,7 @@ function computeClientFinancials(client) {
     });
   });
   return {
-    capital,
-    expectedInterest,
-    interestEarned,
-    principalCollected,
+    capital, expectedInterest, interestEarned, principalCollected,
     outstandingPrincipal: Math.max(0, capital - principalCollected),
     trueProfit: interestEarned,
     realROI: capital > 0 ? (interestEarned / capital) * 100 : 0,
@@ -228,16 +337,13 @@ function computeLoanFinancials(loan) {
   const totalCount = loan.days || 1;
   const today = new Date();
   return {
-    collected,
-    interestEarned: intEarned,
-    principalCollected: prinCollected,
+    collected, interestEarned: intEarned, principalCollected: prinCollected,
     outstandingPrincipal: Math.max(0, p - prinCollected),
     trueProfit: intEarned,
     realROI: p > 0 ? (intEarned / p) * 100 : 0,
     collectionRate: td > 0 ? (collected / td) * 100 : 0,
     completionRate: (paidCount / totalCount) * 100,
-    paidCount,
-    totalCount,
+    paidCount, totalCount,
     overdueCount: (loan.schedule || []).filter(s => !s.paid && new Date(s.dueDate) < today).length,
     onTimeCount: (loan.schedule || []).filter(s => s.paid && s.paidDate <= s.dueDate).length,
     lateCount: (loan.schedule || []).filter(s => s.paid && s.paidDate > s.dueDate).length,
@@ -250,9 +356,7 @@ function computeMonthlyStats(clientsList, monthKey) {
   const today = new Date();
   clientsList.forEach(c => {
     (c.loans || []).forEach(l => {
-      if ((l.issuedAt || l.startDate || "").slice(0, 7) === monthKey) {
-        totalDisbursed += l.principal || 0;
-      }
+      if ((l.issuedAt || l.startDate || "").slice(0, 7) === monthKey) totalDisbursed += l.principal || 0;
       (l.schedule || []).forEach(s => {
         if ((s.dueDate || "").slice(0, 7) === monthKey) {
           totalExpected += s.payment || 0;
@@ -263,11 +367,8 @@ function computeMonthlyStats(clientsList, monthKey) {
     });
   });
   return {
-    totalDisbursed,
-    totalExpected,
-    totalCollected,
-    outstanding: totalExpected - totalCollected,
-    overdueCount,
+    totalDisbursed, totalExpected, totalCollected,
+    outstanding: totalExpected - totalCollected, overdueCount,
     totalSavings: clientsList.reduce((a, c) => a + (c.savingsBalance || 0), 0)
   };
 }
@@ -277,33 +378,17 @@ function computeMonthlyReport(clients) {
   clients.forEach(c => {
     (c.loans || []).forEach(l => {
       const key = (l.issuedAt || l.startDate || "").slice(0, 7);
-      if (!map[key]) {
-        map[key] = {
-          disbursed: 0,
-          expected: 0,
-          collected: 0,
-          interest: 0,
-          loanCount: 0,
-          clientIds: new Set()
-        };
-      }
+      if (!map[key]) map[key] = { disbursed: 0, expected: 0, collected: 0, interest: 0, loanCount: 0, clientIds: new Set() };
       map[key].disbursed += l.principal || 0;
       map[key].expected += l.totalRepayable || 0;
       map[key].interest += l.totalInterest || 0;
       map[key].loanCount++;
       map[key].clientIds.add(c.id);
-      (l.schedule || []).forEach(s => {
-        if (s.paidAmount > 0) map[key].collected += s.paidAmount;
-      });
+      (l.schedule || []).forEach(s => { if (s.paidAmount > 0) map[key].collected += s.paidAmount; });
     });
   });
   return Object.entries(map)
-    .map(([month, d]) => ({
-      month,
-      ...d,
-      clientCount: d.clientIds.size,
-      outstanding: Math.max(0, d.expected - d.collected)
-    }))
+    .map(([month, d]) => ({ month, ...d, clientCount: d.clientIds.size, outstanding: Math.max(0, d.expected - d.collected) }))
     .sort((a, b) => b.month.localeCompare(a.month));
 }
 
@@ -314,48 +399,29 @@ function computeStaffMonthlyReport(clients, users, monthKey) {
     const myClients = clients.filter(c => c.assignedTo === officer.id);
     let disbursed = 0, collected = 0, expectedThisMonth = 0, overdueCount = 0, loansIssued = 0, paymentsReceived = 0;
     const activeClientIds = new Set();
-
     myClients.forEach(c => {
       (c.loans || []).forEach(l => {
-        if ((l.issuedAt || l.startDate || "").slice(0, 7) === monthKey) {
-          disbursed += l.principal || 0;
-          loansIssued++;
-        }
+        if ((l.issuedAt || l.startDate || "").slice(0, 7) === monthKey) { disbursed += l.principal || 0; loansIssued++; }
         (l.schedule || []).forEach(s => {
           if ((s.dueDate || "").slice(0, 7) === monthKey) {
             expectedThisMonth += s.payment || 0;
             if (s.paidAmount > 0) {
               collected += s.paidAmount;
               if (s.paymentLog && s.paymentLog.length > 0) {
-                s.paymentLog.forEach(pl => {
-                  if ((pl.date || "").slice(0, 7) === monthKey) paymentsReceived++;
-                });
-              } else {
-                paymentsReceived++;
-              }
-            } else if (new Date(s.dueDate) < today) {
-              overdueCount++;
-            }
+                s.paymentLog.forEach(pl => { if ((pl.date || "").slice(0, 7) === monthKey) paymentsReceived++; });
+              } else paymentsReceived++;
+            } else if (new Date(s.dueDate) < today) overdueCount++;
             activeClientIds.add(c.id);
           }
         });
       });
     });
-
-    const collectionRate = expectedThisMonth > 0 ? (collected / expectedThisMonth) * 100 : 0;
-
     staffReports.push({
-      officer,
-      totalClients: myClients.length,
-      activeClients: activeClientIds.size,
-      disbursed,
-      collected,
-      expectedThisMonth,
+      officer, totalClients: myClients.length, activeClients: activeClientIds.size,
+      disbursed, collected, expectedThisMonth,
       outstanding: Math.max(0, expectedThisMonth - collected),
-      overdueCount,
-      loansIssued,
-      paymentsReceived,
-      collectionRate,
+      overdueCount, loansIssued, paymentsReceived,
+      collectionRate: expectedThisMonth > 0 ? (collected / expectedThisMonth) * 100 : 0,
       savingsBalance: myClients.reduce((a, c) => a + (c.savingsBalance || 0), 0)
     });
   });
@@ -369,46 +435,31 @@ function getClientTransactions(client) {
       if (s.paymentLog && s.paymentLog.length > 0) {
         s.paymentLog.forEach((pl, plIdx) => {
           txs.push({
-            id: `${l.id}-${s.day}-${plIdx}`,
-            type: "loan_payment",
-            date: pl.date,
-            amount: pl.amount,
+            id: `${l.id}-${s.day}-${plIdx}`, type: "loan_payment", date: pl.date, amount: pl.amount,
             description: `Loan Cycle ${lIdx + 1} — Day ${s.day}/${l.days}${pl.cascaded ? " (Cascaded)" : ""}`,
             detail: `${pl.by ? `by ${pl.by} · ` : ""}${fd(pl.date)}${pl.cascaded ? " · Auto-cascaded" : ""}`,
-            color: pl.cascaded ? "#a78bfa" : "#4ade80",
-            icon: pl.cascaded ? "⚡" : "✓"
+            color: pl.cascaded ? "#a78bfa" : "#4ade80", icon: pl.cascaded ? "⚡" : "✓"
           });
         });
       } else if (s.paidAmount > 0) {
         txs.push({
-          id: `${l.id}-${s.day}`,
-          type: "loan_payment",
-          date: s.paidDate || s.dueDate,
-          amount: s.paidAmount,
+          id: `${l.id}-${s.day}`, type: "loan_payment", date: s.paidDate || s.dueDate, amount: s.paidAmount,
           description: `Loan Cycle ${lIdx + 1} — Day ${s.day}/${l.days}`,
           detail: s.paid ? (s.overpayment > 0 ? `Overpaid +${fc(s.overpayment)}` : "Full payment") : `Partial (${fc(s.shortfall)} short)`,
-          color: s.paid ? "#4ade80" : "#f87171",
-          icon: s.paid ? "✓" : "⚠"
+          color: s.paid ? "#4ade80" : "#f87171", icon: s.paid ? "✓" : "⚠"
         });
       }
     });
     txs.push({
-      id: `issued-${l.id}`,
-      type: "loan_issued",
-      date: (l.issuedAt || l.startDate || "").split("T")[0],
-      amount: l.principal,
-      description: `Loan Cycle ${lIdx + 1} Issued`,
+      id: `issued-${l.id}`, type: "loan_issued", date: (l.issuedAt || l.startDate || "").split("T")[0],
+      amount: l.principal, description: `Loan Cycle ${lIdx + 1} Issued`,
       detail: `${fc(l.principal)} at ${l.interestRate}% · ${l.days}d · Total: ${fc(l.totalRepayable)}${l.issuedByName ? ` · by ${l.issuedByName}` : ""}`,
-      color: "#60a5fa",
-      icon: "💰"
+      color: "#60a5fa", icon: "💰"
     });
   });
   (client.savingsLogs || []).forEach(log => {
     txs.push({
-      id: log.id,
-      type: log.type,
-      date: log.date,
-      amount: log.amount,
+      id: log.id, type: log.type, date: log.date, amount: log.amount,
       description: log.type === "deposit" ? "Savings Deposit" : log.type === "withdraw" ? "Savings Withdrawal" : "Admin Adjustment",
       detail: `Balance after: ${fc(log.balanceAfter)}${log.recordedBy ? ` · by ${log.recordedBy}` : ""}`,
       color: log.type === "deposit" ? "#4ade80" : log.type === "withdraw" ? "#f87171" : "#c084fc",
@@ -447,7 +498,9 @@ const Icon = ({ name, size = 16 }) => {
     account: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /></svg>,
     key: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>,
     history: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>,
-    chart: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>
+    chart: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>,
+    route: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="6" cy="19" r="3" /><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /><circle cx="18" cy="5" r="3" /></svg>,
+    restructure: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
   };
   return icons[name] || null;
 };
@@ -575,6 +628,23 @@ function FP({ fin, isClient, expandFinancials, setExpandFinancials }) {
   );
 }
 
+// ─── PRIORITY 1: SHORTFALL BANNER ────────────────────────────────────────────
+function ShortfallBanner({ loan }) {
+  const { totalShortfall, shortfallDays } = computeTotalShortfall(loan);
+  if (totalShortfall <= 0) return null;
+  return (
+    <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#f87171", fontWeight: 700, marginBottom: 2 }}>⚠️ TOTAL SHORTFALL OWED</div>
+          <div style={{ fontSize: 9, color: "#7a3a3a" }}>{shortfallDays} day{shortfallDays !== 1 ? "s" : ""} with unpaid gaps — above normal schedule</div>
+        </div>
+        <div style={{ fontSize: 20, fontWeight: 900, color: "#ef4444", fontFamily: "'Courier New',monospace" }}>{fc(totalShortfall)}</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── INSTALLMENT ROW ─────────────────────────────────────────────────────────
 function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const [showLog, setShowLog] = useState(false);
@@ -603,6 +673,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
               <span style={{ fontSize: 12, fontWeight: 700, color: s.paid ? "#4ade80" : isSF ? "#f87171" : isOD ? "#f87171" : "#c8dde8", fontFamily: "'Courier New',monospace" }}>
                 {fc(s.paid ? s.paidAmount : s.payment)}
               </span>
+              {s.restructured && <Badge color="#c084fc" bg="rgba(192,132,252,0.12)">RESTRUCTURED</Badge>}
               {isNext && <Badge color="#60a5fa" bg="rgba(96,165,250,0.12)">NEXT</Badge>}
               {isOD && !isSF && <Badge color="#f87171" bg="rgba(239,68,68,0.1)">OVERDUE</Badge>}
               {isLate && <Badge color="#f59e0b" bg="rgba(245,158,11,0.1)">LATE</Badge>}
@@ -651,7 +722,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
 }
 
 // ─── LOAN CYCLE CARD ─────────────────────────────────────────────────────────
-function LCC({ loan, num, total, isAdmin, onPay, onOverride, today }) {
+function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructure }) {
   const [exp, setExp] = useState(num === total);
   const [schOpen, setSchOpen] = useState(num === total);
   const fin = computeLoanFinancials(loan);
@@ -671,6 +742,7 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today }) {
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>Cycle {num}</span>
                 <Badge color={isAct ? "#4ade80" : "#60a5fa"} bg={isAct ? "rgba(34,197,94,0.12)" : "rgba(96,165,250,0.12)"}>{isAct ? "ACTIVE" : "DONE"}</Badge>
+                {(loan.restructureLog || []).length > 0 && <Badge color="#c084fc" bg="rgba(192,132,252,0.12)">RESTRUCTURED</Badge>}
               </div>
               <div style={{ fontSize: 10, color: "#3a5a70" }}>{fd(loan.startDate)} · {loan.days}d · {loan.interestRate}%</div>
             </div>
@@ -694,6 +766,22 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today }) {
       </div>
       {exp && (
         <div style={{ padding: "14px 16px" }}>
+          {/* PRIORITY 1: Shortfall Banner on active loans */}
+          {isAct && <ShortfallBanner loan={loan} />}
+
+          {/* PRIORITY 4: Restructure Log */}
+          {(loan.restructureLog || []).length > 0 && (
+            <div style={{ background: "rgba(192,132,252,0.06)", border: "1px solid rgba(192,132,252,0.2)", borderRadius: 12, padding: "10px 14px", marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "#c084fc", fontWeight: 700, marginBottom: 8 }}>🔄 Restructure History</div>
+              {loan.restructureLog.map((r, idx) => (
+                <div key={idx} style={{ fontSize: 10, color: "#8a6aaa", marginBottom: 4 }}>
+                  {fd(r.date)} · {fc(r.newDailyAmount)}/day · {r.newDays} days · by {r.approvedBy}
+                  {r.reason && <div style={{ fontSize: 9, color: "#6a4a8a", marginTop: 1 }}>"{r.reason}"</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
             {[["Principal", fc(loan.principal), "#93c5fd"], ["Daily", fc(loan.dailyPayment), "#60a5fa"], ["Total", fc(loan.totalRepayable), "#e8f4fd"], ["Collected", fc(fin.collected), "#4ade80"], ["Outstanding", fc(Math.max(0, loan.totalRepayable - fin.collected)), fin.outstandingPrincipal > 0 ? "#f87171" : "#4ade80"], ["Interest", `${loan.interestRate}%`, "#c4b5fd"]].map(([l, v, c]) => (
               <div key={l} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 9, padding: "9px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
@@ -730,6 +818,14 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today }) {
             </div>
             <div style={{ fontSize: 22, fontWeight: 900, color: pc, fontFamily: "'Courier New',monospace" }}>{fin.completionRate.toFixed(0)}%</div>
           </div>
+
+          {/* PRIORITY 4: Restructure Button */}
+          {isAdmin && isAct && (
+            <button onClick={() => onRestructure(loan)} style={{ width: "100%", background: "rgba(192,132,252,0.1)", border: "1px solid rgba(192,132,252,0.25)", color: "#c084fc", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 10 }}>
+              <Icon name="restructure" size={13} />Restructure Loan
+            </button>
+          )}
+
           <button onClick={() => setSchOpen(!schOpen)} style={{ width: "100%", background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: schOpen ? 10 : 0 }}>
             <Icon name="calendar" size={13} />{schOpen ? "Hide" : "View"} Schedule
           </button>
@@ -836,10 +932,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
       (c.loans || []).forEach(l => {
         const m = (l.issuedAt || l.startDate || "").slice(0, 7);
         if (m) months.add(m);
-        (l.schedule || []).forEach(s => {
-          const dm = (s.dueDate || "").slice(0, 7);
-          if (dm) months.add(dm);
-        });
+        (l.schedule || []).forEach(s => { const dm = (s.dueDate || "").slice(0, 7); if (dm) months.add(dm); });
       });
     });
     months.add(curMonthKey);
@@ -935,9 +1028,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
 
       {showAdd && (
         <Modal title="Create Staff Account" onClose={() => setShowAdd(false)}>
-          <div style={{ background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, color: "#60a5fa" }}>
-            👑 Only admin can create accounts.
-          </div>
           <Field label="Name *"><input style={IS} value={ns.name} onChange={e => setNs(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
           <Field label="Username *"><input style={IS} value={ns.username} onChange={e => setNs(p => ({ ...p, username: e.target.value.toLowerCase().replace(/\s/g, "") }))} /></Field>
           <Field label="Password *"><input type="password" style={IS} value={ns.password} onChange={e => setNs(p => ({ ...p, password: e.target.value }))} placeholder="Min 4 chars" /></Field>
@@ -950,10 +1040,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
           <Field label="Name"><input style={IS} value={editS.name} onChange={e => setEditS(p => ({ ...p, name: e.target.value }))} /></Field>
           <Field label="Username"><input style={IS} value={editS.username} onChange={e => setEditS(p => ({ ...p, username: e.target.value.toLowerCase().replace(/\s/g, "") }))} /></Field>
           <button onClick={() => {
-            if (editS.username && users.find(u => u.username === editS.username && u.id !== editS.id)) {
-              showToast("Taken", "error");
-              return;
-            }
+            if (editS.username && users.find(u => u.username === editS.username && u.id !== editS.id)) { showToast("Taken", "error"); return; }
             onUpdateUsers(users.map(u => u.id === editS.id ? { ...u, name: editS.name, username: editS.username } : u));
             setEditS(null);
             showToast("Updated!");
@@ -986,58 +1073,43 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
               {availableMonths.map(m => <option key={m} value={m}>{fm(m)}</option>)}
             </select>
           </div>
-
           {staffReport.length === 0 ? (
             <div style={{ textAlign: "center", padding: 40, color: "#3a5a70" }}>No staff data for this month.</div>
-          ) : (
-            staffReport.map(sr => {
-              const rateColor = sr.collectionRate >= 80 ? "#22c55e" : sr.collectionRate >= 50 ? "#f59e0b" : "#ef4444";
-              return (
-                <div key={sr.officer.id} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(100,180,255,0.1)", borderRadius: 16, padding: "16px", marginBottom: 14 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-                    <div style={{ width: 44, height: 44, borderRadius: 12, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0 }}>{sr.officer.name.charAt(0)}</div>
-                    <div style={{ flexGrow: 1 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: "#e8f4fd" }}>{sr.officer.name}</div>
-                      <div style={{ fontSize: 11, color: "#3a5a70" }}>@{sr.officer.username} · {fm(reportMonth)}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 18, fontWeight: 900, color: rateColor, fontFamily: "'Courier New',monospace" }}>{sr.collectionRate.toFixed(1)}%</div>
-                      <div style={{ fontSize: 9, color: "#3a5a70" }}>Rate</div>
-                    </div>
+          ) : staffReport.map(sr => {
+            const rateColor = sr.collectionRate >= 80 ? "#22c55e" : sr.collectionRate >= 50 ? "#f59e0b" : "#ef4444";
+            return (
+              <div key={sr.officer.id} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(100,180,255,0.1)", borderRadius: 16, padding: "16px", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0 }}>{sr.officer.name.charAt(0)}</div>
+                  <div style={{ flexGrow: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#e8f4fd" }}>{sr.officer.name}</div>
+                    <div style={{ fontSize: 11, color: "#3a5a70" }}>@{sr.officer.username} · {fm(reportMonth)}</div>
                   </div>
-
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#3a5a70", marginBottom: 5 }}>
-                      <span>Collected: {fc(sr.collected)}</span>
-                      <span>Expected: {fc(sr.expectedThisMonth)}</span>
-                    </div>
-                    <div style={{ height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(sr.collectionRate, 100)}%`, background: `linear-gradient(90deg,${rateColor},${rateColor}99)`, borderRadius: 4 }} />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-                    {[
-                      ["💰 Disbursed", fc(sr.disbursed), "#60a5fa"],
-                      ["📥 Collected", fc(sr.collected), "#4ade80"],
-                      ["📊 Outstanding", fc(sr.outstanding), "#f87171"],
-                      ["👥 Clients", sr.totalClients, "#93c5fd"],
-                      ["🏃 Active", sr.activeClients, "#f59e0b"],
-                      ["📋 Loans", sr.loansIssued, "#c4b5fd"],
-                      ["✅ Payments", sr.paymentsReceived, "#4ade80"],
-                      ["⚠️ Overdue", sr.overdueCount, "#ef4444"],
-                      ["💎 Savings", fc(sr.savingsBalance), "#c084fc"]
-                    ].map(([l, v, c]) => (
-                      <div key={l} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 9, padding: "9px 10px" }}>
-                        <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 3 }}>{l}</div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: c, fontFamily: "'Courier New',monospace" }}>{v}</div>
-                      </div>
-                    ))}
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: rateColor, fontFamily: "'Courier New',monospace" }}>{sr.collectionRate.toFixed(1)}%</div>
+                    <div style={{ fontSize: 9, color: "#3a5a70" }}>Rate</div>
                   </div>
                 </div>
-              );
-            })
-          )}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#3a5a70", marginBottom: 5 }}>
+                    <span>Collected: {fc(sr.collected)}</span>
+                    <span>Expected: {fc(sr.expectedThisMonth)}</span>
+                  </div>
+                  <div style={{ height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(sr.collectionRate, 100)}%`, background: `linear-gradient(90deg,${rateColor},${rateColor}99)`, borderRadius: 4 }} />
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                  {[["💰 Disbursed", fc(sr.disbursed), "#60a5fa"], ["📥 Collected", fc(sr.collected), "#4ade80"], ["📊 Outstanding", fc(sr.outstanding), "#f87171"], ["👥 Clients", sr.totalClients, "#93c5fd"], ["🏃 Active", sr.activeClients, "#f59e0b"], ["📋 Loans", sr.loansIssued, "#c4b5fd"], ["✅ Payments", sr.paymentsReceived, "#4ade80"], ["⚠️ Overdue", sr.overdueCount, "#ef4444"], ["💎 Savings", fc(sr.savingsBalance), "#c084fc"]].map(([l, v, c]) => (
+                    <div key={l} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 9, padding: "9px 10px" }}>
+                      <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 3 }}>{l}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: c, fontFamily: "'Courier New',monospace" }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </Modal>
       )}
     </div>
@@ -1079,8 +1151,16 @@ export default function App() {
   const [expandFinancials, setExpandFinancials] = useState(true);
   const [acctDateFilter, setAcctDateFilter] = useState("today");
   const [acctSelectedDay, setAcctSelectedDay] = useState(null);
-  const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "" });
+  const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "" });
   const [newLoan, setNewLoan] = useState({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
+  // Priority 4 - Restructure
+  const [showRestructure, setShowRestructure] = useState(null);
+  const [restructureInput, setRestructureInput] = useState({ newDailyAmount: "", reason: "" });
+  // Priority 3 - Route view visited state
+  const [routeVisited, setRouteVisited] = useState({});
+  // Priority 6 - Backup reminder
+  const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem("creda_last_backup") || null);
+  const [dismissedBackup, setDismissedBackup] = useState(false);
 
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type });
@@ -1094,12 +1174,8 @@ export default function App() {
     const unsubs = [
       fbListen("clients", v => { setClients(v || []); setSync("synced"); }),
       fbListen("users", v => {
-        if (!v || v.length === 0) {
-          fbSet("users", DEFAULT_USERS);
-          setUsers(DEFAULT_USERS);
-        } else {
-          setUsers(v);
-        }
+        if (!v || v.length === 0) { fbSet("users", DEFAULT_USERS); setUsers(DEFAULT_USERS); }
+        else setUsers(v);
       }),
       fbListen("pendingLoans", v => setPendingLoans(v || []))
     ];
@@ -1121,6 +1197,8 @@ export default function App() {
     if (clientFilter === "active") return match && active;
     if (clientFilter === "completed") return match && !active && c.loans?.length > 0;
     if (clientFilter === "none") return match && (!c.loans || c.loans.length === 0);
+    if (clientFilter === "red") return match && computeClientRisk(c).level === "red";
+    if (clientFilter === "amber") return match && computeClientRisk(c).level === "amber";
     return match;
   }), [visibleClients, clientSearch, clientFilter]);
 
@@ -1138,14 +1216,7 @@ export default function App() {
           });
         });
       });
-      return {
-        totalDisbursed: d,
-        totalExpected: e,
-        totalCollected: c,
-        outstanding: e - c,
-        overdueCount: o,
-        totalSavings: src.reduce((a, cl) => a + (cl.savingsBalance || 0), 0)
-      };
+      return { totalDisbursed: d, totalExpected: e, totalCollected: c, outstanding: e - c, overdueCount: o, totalSavings: src.reduce((a, cl) => a + (cl.savingsBalance || 0), 0) };
     }
     return computeMonthlyStats(src, curMonthKey);
   }, [clients, visibleClients, isAdmin]);
@@ -1160,28 +1231,10 @@ export default function App() {
         (l.schedule || []).forEach(s => {
           if (s.paymentLog && s.paymentLog.length > 0) {
             s.paymentLog.forEach(pl => {
-              tx.push({
-                clientId: c.id,
-                clientName: c.name,
-                day: s.day,
-                totalDays: l.days,
-                paidAmount: pl.amount,
-                paidDate: pl.date,
-                dueDate: s.dueDate,
-                cascaded: pl.cascaded || false,
-                by: pl.by || ""
-              });
+              tx.push({ clientId: c.id, clientName: c.name, day: s.day, totalDays: l.days, paidAmount: pl.amount, paidDate: pl.date, dueDate: s.dueDate, cascaded: pl.cascaded || false, by: pl.by || "" });
             });
           } else if (s.paidAmount > 0) {
-            tx.push({
-              clientId: c.id,
-              clientName: c.name,
-              day: s.day,
-              totalDays: l.days,
-              paidAmount: s.paidAmount,
-              paidDate: s.paidDate,
-              dueDate: s.dueDate
-            });
+            tx.push({ clientId: c.id, clientName: c.name, day: s.day, totalDays: l.days, paidAmount: s.paidAmount, paidDate: s.paidDate, dueDate: s.dueDate });
           }
         });
       });
@@ -1200,30 +1253,42 @@ export default function App() {
           if (!map[due]) map[due] = { date: due, expected: 0, collected: 0, installments: [] };
           map[due].expected += s.payment || 0;
           map[due].collected += s.paidAmount || 0;
-          map[due].installments.push({
-            clientName: c.name,
-            clientId: c.id,
-            day: s.day,
-            totalDays: l.days,
-            payment: s.payment,
-            paidAmount: s.paidAmount || 0,
-            paid: s.paid,
-            paidDate: s.paidDate,
-            dueDate: s.dueDate
-          });
+          map[due].installments.push({ clientName: c.name, clientId: c.id, day: s.day, totalDays: l.days, payment: s.payment, paidAmount: s.paidAmount || 0, paid: s.paid, paidDate: s.paidDate, dueDate: s.dueDate });
         });
       });
     });
     return Object.values(map).sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [clients, visibleClients, isAdmin]);
 
+  // PRIORITY 3: Today's route data for officers
+  const todayRoute = useMemo(() => {
+    const src = visibleClients;
+    const route = [];
+    src.forEach(c => {
+      (c.loans || []).forEach(l => {
+        if (l.status !== "active") return;
+        const todaySlot = l.schedule?.find(s => s.dueDate === todayStr && !s.paid);
+        if (todaySlot) {
+          route.push({ clientId: c.id, clientName: c.name, phone: c.phone, loanId: l.id, scheduleIdx: l.schedule.indexOf(todaySlot), payment: todaySlot.payment, paidAmount: todaySlot.paidAmount || 0, paid: todaySlot.paid, risk: computeClientRisk(c) });
+        }
+      });
+    });
+    return route;
+  }, [visibleClients]);
+
+  // PRIORITY 6: Backup reminder logic
+  const showBackupReminder = useMemo(() => {
+    if (dismissedBackup) return false;
+    if (!lastBackupDate) return true;
+    const daysSince = Math.floor((new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24));
+    const isFriday = new Date().getDay() === 5;
+    return daysSince >= 7 || isFriday;
+  }, [lastBackupDate, dismissedBackup]);
+
   const computePP = (loan, idx, amt) => {
     if (!amt || amt <= 0) return null;
     const sim = applySmartPayment(loan.schedule, idx, amt, todayStr, currentUser?.name);
-    return {
-      daysCleared: sim.filter(s => s.paid).length - loan.schedule.filter(s => s.paid).length,
-      remainingBal: sim[sim.length - 1]?.balance || 0
-    };
+    return { daysCleared: sim.filter(s => s.paid).length - loan.schedule.filter(s => s.paid).length, remainingBal: sim[sim.length - 1]?.balance || 0 };
   };
 
   const getClientSummary = c => {
@@ -1249,7 +1314,7 @@ export default function App() {
       assignedToName: currentUser?.name,
       createdAt: todayStr
     }, ...clients]);
-    setNewClient({ name: "", phone: "", address: "", idNumber: "" });
+    setNewClient({ name: "", phone: "", address: "", idNumber: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "" });
     setShowAddClient(false);
     showToast("Registered!");
   };
@@ -1267,19 +1332,7 @@ export default function App() {
     const r = parseFloat(newLoan.interestRate);
     const d = parseInt(newLoan.days);
     const calc = calcLoanSchedule(p, r, d, newLoan.startDate, newLoan.excludeWeekends);
-    const loan = {
-      id: generateId("LN"),
-      principal: p,
-      interestRate: r,
-      days: d,
-      startDate: newLoan.startDate,
-      ...calc,
-      status: "active",
-      issuedAt: new Date().toISOString(),
-      excludeWeekends: newLoan.excludeWeekends,
-      issuedBy: currentUser?.id,
-      issuedByName: currentUser?.name
-    };
+    const loan = { id: generateId("LN"), principal: p, interestRate: r, days: d, startDate: newLoan.startDate, ...calc, status: "active", issuedAt: new Date().toISOString(), excludeWeekends: newLoan.excludeWeekends, issuedBy: currentUser?.id, issuedByName: currentUser?.name };
     saveClients(clients.map(c => c.id === selectedClientId ? { ...c, loans: [...(c.loans || []), loan] } : c));
     setNewLoan({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
     setShowAddLoan(false);
@@ -1292,36 +1345,20 @@ export default function App() {
     const r = parseFloat(newLoan.interestRate);
     const d = parseInt(newLoan.days);
     const calc = calcLoanSchedule(p, r, d, newLoan.startDate, newLoan.excludeWeekends);
-    savePending([...pendingLoans, {
-      id: generateId("PL"),
-      clientId: selectedClientId,
-      requestedBy: currentUser?.id,
-      requestedByName: currentUser?.name,
-      requestedAt: new Date().toISOString(),
-      loanData: { principal: p, interestRate: r, days: d, startDate: newLoan.startDate, ...calc, excludeWeekends: newLoan.excludeWeekends }
-    }]);
+    savePending([...pendingLoans, { id: generateId("PL"), clientId: selectedClientId, requestedBy: currentUser?.id, requestedByName: currentUser?.name, requestedAt: new Date().toISOString(), loanData: { principal: p, interestRate: r, days: d, startDate: newLoan.startDate, ...calc, excludeWeekends: newLoan.excludeWeekends } }]);
     setNewLoan({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
     setShowAddLoan(false);
     showToast("Request submitted!");
   };
 
   const handleApproveLoan = pl => {
-    const loan = {
-      id: generateId("LN"),
-      ...pl.loanData,
-      status: "active",
-      issuedAt: new Date().toISOString(),
-      approvedByName: currentUser?.name
-    };
+    const loan = { id: generateId("LN"), ...pl.loanData, status: "active", issuedAt: new Date().toISOString(), approvedByName: currentUser?.name };
     saveClients(clients.map(c => c.id === pl.clientId ? { ...c, loans: [...(c.loans || []), loan] } : c));
     savePending(pendingLoans.filter(p => p.id !== pl.id));
     showToast("Approved!");
   };
 
-  const handleRejectLoan = id => {
-    savePending(pendingLoans.filter(p => p.id !== id));
-    showToast("Rejected", "error");
-  };
+  const handleRejectLoan = id => { savePending(pendingLoans.filter(p => p.id !== id)); showToast("Rejected", "error"); };
 
   const handlePayment = () => {
     const amount = parseFloat(paymentAmount);
@@ -1334,19 +1371,31 @@ export default function App() {
         loans: c.loans.map(l => {
           if (l.id !== loanId) return l;
           const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
-          return {
-            ...l,
-            schedule: ns,
-            status: ns.every(s => s.paid) ? "completed" : "active",
-            lastPaymentBy: currentUser?.name
-          };
+          return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
         })
       };
     }));
-    setPaymentAmount("");
-    setShowPayment(null);
-    setPaymentPreview(null);
+    setPaymentAmount(""); setShowPayment(null); setPaymentPreview(null);
     showToast("Payment recorded!");
+  };
+
+  // PRIORITY 4: Handle restructure
+  const handleRestructure = () => {
+    if (!showRestructure || !restructureInput.newDailyAmount) return;
+    const newAmt = parseFloat(restructureInput.newDailyAmount);
+    if (isNaN(newAmt) || newAmt <= 0) { showToast("Invalid amount", "error"); return; }
+    if (!restructureInput.reason.trim()) { showToast("Reason required", "error"); return; }
+    saveClients(clients.map(c => {
+      const hasLoan = c.loans?.find(l => l.id === showRestructure.id);
+      if (!hasLoan) return c;
+      return {
+        ...c,
+        loans: c.loans.map(l => l.id === showRestructure.id ? restructureLoan(l, newAmt, restructureInput.reason, currentUser?.name) : l)
+      };
+    }));
+    setShowRestructure(null);
+    setRestructureInput({ newDailyAmount: "", reason: "" });
+    showToast("Loan restructured!");
   };
 
   const handleSavingsTransaction = () => {
@@ -1356,26 +1405,11 @@ export default function App() {
     saveClients(clients.map(c => {
       if (c.id !== client.id) return c;
       const cur = c.savingsBalance || 0;
-      if (type === "withdraw" && amt > cur) {
-        showToast("Insufficient!", "error");
-        return c;
-      }
+      if (type === "withdraw" && amt > cur) { showToast("Insufficient!", "error"); return c; }
       const nb = type === "deposit" ? cur + amt : cur - amt;
-      return {
-        ...c,
-        savingsBalance: nb,
-        savingsLogs: [{
-          id: generateId("TX"),
-          date: todayStr,
-          type,
-          amount: amt,
-          balanceAfter: nb,
-          recordedBy: currentUser?.name
-        }, ...(c.savingsLogs || [])]
-      };
+      return { ...c, savingsBalance: nb, savingsLogs: [{ id: generateId("TX"), date: todayStr, type, amount: amt, balanceAfter: nb, recordedBy: currentUser?.name }, ...(c.savingsLogs || [])] };
     }));
-    setSavingsAmount("");
-    setShowSavingsTx(null);
+    setSavingsAmount(""); setShowSavingsTx(null);
     showToast(`${type === "deposit" ? "Deposit" : "Withdrawal"} done!`);
   };
 
@@ -1383,20 +1417,8 @@ export default function App() {
     const nb = parseFloat(adminDirectSavingsInput);
     if (isNaN(nb) || !showSavingsTx) return;
     const { client } = showSavingsTx;
-    saveClients(clients.map(c => c.id !== client.id ? c : {
-      ...c,
-      savingsBalance: nb,
-      savingsLogs: [{
-        id: generateId("TX"),
-        date: todayStr,
-        type: "admin_adjustment",
-        amount: Math.abs(nb - (c.savingsBalance || 0)),
-        balanceAfter: nb,
-        recordedBy: currentUser?.name
-      }, ...(c.savingsLogs || [])]
-    }));
-    setAdminDirectSavingsInput("");
-    setShowSavingsTx(null);
+    saveClients(clients.map(c => c.id !== client.id ? c : { ...c, savingsBalance: nb, savingsLogs: [{ id: generateId("TX"), date: todayStr, type: "admin_adjustment", amount: Math.abs(nb - (c.savingsBalance || 0)), balanceAfter: nb, recordedBy: currentUser?.name }, ...(c.savingsLogs || [])] }));
+    setAdminDirectSavingsInput(""); setShowSavingsTx(null);
     showToast("Adjusted!");
   };
 
@@ -1412,32 +1434,11 @@ export default function App() {
           if (l.id !== loan.id) return l;
           const updatedSchedule = l.schedule.map((s, i) => {
             if (i !== idx) return s;
-            return {
-              ...s,
-              paid: adminInstOverride.paid,
-              dueDate: adminInstOverride.dueDate,
-              paidDate: adminInstOverride.paid ? (adminInstOverride.paidDate || todayStr) : null,
-              paidAmount: adminInstOverride.paid ? pAmt : 0,
-              overpayment: adminInstOverride.paid && pAmt > s.payment ? pAmt - s.payment : 0,
-              shortfall: adminInstOverride.paid && pAmt < s.payment ? s.payment - pAmt : 0,
-              paymentLog: adminInstOverride.paid ? [{
-                amount: pAmt,
-                date: adminInstOverride.paidDate || todayStr,
-                by: currentUser?.name,
-                at: new Date().toISOString()
-              }] : []
-            };
+            return { ...s, paid: adminInstOverride.paid, dueDate: adminInstOverride.dueDate, paidDate: adminInstOverride.paid ? (adminInstOverride.paidDate || todayStr) : null, paidAmount: adminInstOverride.paid ? pAmt : 0, overpayment: adminInstOverride.paid && pAmt > s.payment ? pAmt - s.payment : 0, shortfall: adminInstOverride.paid && pAmt < s.payment ? s.payment - pAmt : 0, paymentLog: adminInstOverride.paid ? [{ amount: pAmt, date: adminInstOverride.paidDate || todayStr, by: currentUser?.name, at: new Date().toISOString() }] : [] };
           });
           let run = l.totalRepayable;
-          const rc = updatedSchedule.map(s => {
-            if (s.paidAmount > 0) run = Math.max(0, run - s.paidAmount);
-            return { ...s, balance: run };
-          });
-          return {
-            ...l,
-            schedule: rc,
-            status: rc.every(s => s.paid) ? "completed" : "active"
-          };
+          const rc = updatedSchedule.map(s => { if (s.paidAmount > 0) run = Math.max(0, run - s.paidAmount); return { ...s, balance: run }; });
+          return { ...l, schedule: rc, status: rc.every(s => s.paid) ? "completed" : "active" };
         })
       };
     }));
@@ -1473,13 +1474,17 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "8.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "9.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `creda_backup_${todayStr}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    // PRIORITY 6: Record backup date
+    localStorage.setItem("creda_last_backup", todayStr);
+    setLastBackupDate(todayStr);
+    setDismissedBackup(false);
     showToast("Downloaded!");
   };
 
@@ -1503,6 +1508,83 @@ export default function App() {
     return <LoginScreen users={users} onLogin={u => { setCurrentUser(u); setProfileEdit({ oldPassword: "", newPassword: "", confirmPassword: "" }); }} />;
   }
 
+  // ── PRIORITY 6: Backup Reminder Banner ───────────────────────────────────
+  const BackupBanner = () => {
+    if (!showBackupReminder || !isAdmin) return null;
+    const daysSince = lastBackupDate ? Math.floor((new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24)) : null;
+    return (
+      <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>💾</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>Backup Reminder</div>
+            <div style={{ fontSize: 10, color: "#7a6030" }}>{daysSince === null ? "No backup recorded" : `Last backup ${daysSince} day${daysSince !== 1 ? "s" : ""} ago`}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => { exportData(); }} style={{ background: "#f59e0b", border: "none", color: "#000", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>Backup Now</button>
+          <button onClick={() => setDismissedBackup(true)} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#5a7a90", padding: "6px 10px", borderRadius: 8, cursor: "pointer", fontSize: 11 }}>×</button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── PRIORITY 3: Today's Route Panel ──────────────────────────────────────
+  const TodayRoute = () => {
+    if (isAdmin) return null;
+    if (todayRoute.length === 0) return null;
+    const totalExpected = todayRoute.reduce((s, r) => s + r.payment, 0);
+    const totalCollected = todayRoute.reduce((s, r) => s + (r.paidAmount || 0), 0);
+    const visitedCount = Object.values(routeVisited).filter(Boolean).length;
+
+    return (
+      <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.08),rgba(34,197,94,0.06))", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 16, padding: 16, marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="route" size={16} />
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa" }}>Today's Route</div>
+              <div style={{ fontSize: 10, color: "#3a5a70" }}>{fd(todayStr)} · {todayRoute.length} client{todayRoute.length !== 1 ? "s" : ""} · {visitedCount} visited</div>
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(totalCollected)}</div>
+            <div style={{ fontSize: 9, color: "#3a5a70" }}>of {fc(totalExpected)}</div>
+          </div>
+        </div>
+
+        <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+          <div style={{ height: "100%", width: `${totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0}%`, background: "linear-gradient(90deg,#22c55e,#4ade80)", borderRadius: 4 }} />
+        </div>
+
+        {todayRoute.map((r, idx) => {
+          const visited = routeVisited[r.clientId];
+          return (
+            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: visited ? "rgba(34,197,94,0.06)" : "rgba(255,255,255,0.02)", border: `1px solid ${r.risk.level === "red" ? "rgba(239,68,68,0.25)" : r.risk.level === "amber" ? "rgba(245,158,11,0.2)" : "rgba(34,197,94,0.1)"}`, borderRadius: 10, marginBottom: 8 }}>
+              <button onClick={() => setRouteVisited(prev => ({ ...prev, [r.clientId]: !visited }))} style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0, background: visited ? "#22c55e" : "rgba(255,255,255,0.06)", border: visited ? "none" : "1px solid rgba(255,255,255,0.12)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: visited ? "#000" : "#3a5a70" }}>
+                {visited ? <Icon name="check" size={12} /> : "○"}
+              </button>
+              <div style={{ flexGrow: 1, cursor: "pointer" }} onClick={() => { setSelectedClientId(r.clientId); setView("detail"); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: visited ? "#4ade80" : "#e8f4fd" }}>{r.clientName}</span>
+                  <span style={{ fontSize: 12 }}>{r.risk.emoji}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#3a5a70" }}>{r.phone}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: r.paid ? "#4ade80" : "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(r.payment)}</div>
+                {r.paidAmount > 0 && !r.paid && <div style={{ fontSize: 9, color: "#f87171" }}>+{fc(r.paidAmount)} partial</div>}
+              </div>
+              {!r.paid && (
+                <button onClick={() => { setSelectedClientId(r.clientId); setView("detail"); setShowPayment({ clientId: r.clientId, loanId: r.loanId, scheduleIdx: r.scheduleIdx }); setPaymentAmount(r.payment.toFixed(2)); }} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "6px 10px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 10, flexShrink: 0 }}>Pay</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const Dashboard = () => (
     <div>
       <div style={{ marginBottom: 22, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -1517,6 +1599,9 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* PRIORITY 6: Backup Banner */}
+      <BackupBanner />
 
       {!isAdmin && (
         <div style={{ background: "rgba(96,165,250,0.08)", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#60a5fa", fontWeight: 700 }}>
@@ -1533,6 +1618,9 @@ export default function App() {
           <Icon name="chevronDown" size={14} />
         </div>
       )}
+
+      {/* PRIORITY 3: Today's Route for Officers */}
+      <TodayRoute />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
         <SC label={isAdmin ? "Disbursed" : "This Month"} value={fc(stats.totalDisbursed)} accent="#3b82f6" />
@@ -1591,7 +1679,8 @@ export default function App() {
         <button onClick={() => setView("clients")} style={{ background: "none", border: "none", color: "#3b82f6", fontSize: 12, cursor: "pointer" }}>All →</button>
       </div>
       {visibleClients.slice(0, 5).map(c => {
-        const { active, overdue, paid, total, balance } = getClientSummary(c);
+        const { active, overdue, balance } = getClientSummary(c);
+        const risk = computeClientRisk(c);
         return (
           <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); }} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(100,180,255,0.07)", borderRadius: 12, padding: "12px 15px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1601,7 +1690,8 @@ export default function App() {
                 <div style={{ fontSize: 10, color: "#3a5a70" }}>{c.phone}</div>
               </div>
             </div>
-            <div style={{ textAlign: "right" }}>
+            <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 14 }}>{risk.emoji}</span>
               {active ? <div style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div> : <div style={{ fontSize: 11, color: "#2a4050" }}>No loan</div>}
             </div>
           </div>
@@ -1622,21 +1712,31 @@ export default function App() {
         <span style={{ position: "absolute", left: 12, top: 11, color: "#5a7a90" }}><Icon name="search" size={14} /></span>
         <input style={{ ...IS, paddingLeft: 36 }} placeholder="Search…" value={clientSearch} onChange={e => setClientSearch(e.target.value)} />
       </div>
+
+      {/* PRIORITY 2: Filter includes risk filters */}
       <div style={{ display: "flex", gap: 6, marginBottom: 16, overflowX: "auto" }}>
-        {[{ id: "all", l: "All" }, { id: "active", l: "Active" }, { id: "completed", l: "Done" }, { id: "none", l: "No Loan" }].map(f => (
-          <button key={f.id} onClick={() => setClientFilter(f.id)} style={{ background: clientFilter === f.id ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.03)", border: clientFilter === f.id ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(255,255,255,0.06)", color: clientFilter === f.id ? "#4ade80" : "#8ab4c8", padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{f.l}</button>
+        {[{ id: "all", l: "All" }, { id: "active", l: "Active" }, { id: "completed", l: "Done" }, { id: "none", l: "No Loan" }, { id: "red", l: "🔴 High Risk" }, { id: "amber", l: "🟡 Watch" }].map(f => (
+          <button key={f.id} onClick={() => setClientFilter(f.id)} style={{ background: clientFilter === f.id ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.03)", border: clientFilter === f.id ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(255,255,255,0.06)", color: clientFilter === f.id ? "#4ade80" : "#8ab4c8", padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>{f.l}</button>
         ))}
       </div>
+
       {filteredClients.map(c => {
         const { active, overdue, paid, total } = getClientSummary(c);
+        const risk = computeClientRisk(c);
         return (
-          <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); setActiveTab("loans"); }} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(100,180,255,0.07)", borderRadius: 13, padding: "14px 16px", cursor: "pointer", marginBottom: 9 }}>
+          <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); setActiveTab("loans"); }} style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${risk.level === "red" ? "rgba(239,68,68,0.3)" : risk.level === "amber" ? "rgba(245,158,11,0.25)" : "rgba(100,180,255,0.07)"}`, borderRadius: 13, padding: "14px 16px", cursor: "pointer", marginBottom: 9 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: active ? 10 : 0 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <div style={{ width: 40, height: 40, borderRadius: 11, background: "linear-gradient(135deg,#1e3a5f,#2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#93c5fd", flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
                 <div>
                   <div style={{ fontWeight: 700, color: "#dceef8", fontSize: 14 }}>{c.name}</div>
                   <div style={{ fontSize: 10, color: "#3a5a70" }}>{c.phone}{isAdmin && c.assignedToName && <span style={{ color: "#60a5fa" }}> · {c.assignedToName}</span>}</div>
+                  {/* PRIORITY 2: Risk tag visible on list */}
+                  {active && (
+                    <div style={{ marginTop: 3 }}>
+                      <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 10, background: risk.bg, color: risk.color, fontWeight: 700 }}>{risk.emoji} {risk.label}</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <Badge color={active ? "#4ade80" : "#3a5a70"} bg={active ? "rgba(34,197,94,0.12)" : "rgba(100,130,150,0.08)"}>{active ? "Active" : c.loans?.length ? "Done" : "No Loan"}</Badge>
@@ -1683,16 +1783,8 @@ export default function App() {
     const todayData = dailyCollectionData.find(d => d.date === todayStr);
     const filteredDays = useMemo(() => {
       if (acctDateFilter === "today") return dailyCollectionData.filter(d => d.date === todayStr);
-      if (acctDateFilter === "week") {
-        const w = new Date(today);
-        w.setDate(w.getDate() - 7);
-        return dailyCollectionData.filter(d => new Date(d.date) >= w);
-      }
-      if (acctDateFilter === "month") {
-        const m = new Date(today);
-        m.setDate(m.getDate() - 30);
-        return dailyCollectionData.filter(d => new Date(d.date) >= m);
-      }
+      if (acctDateFilter === "week") { const w = new Date(today); w.setDate(w.getDate() - 7); return dailyCollectionData.filter(d => new Date(d.date) >= w); }
+      if (acctDateFilter === "month") { const m = new Date(today); m.setDate(m.getDate() - 30); return dailyCollectionData.filter(d => new Date(d.date) >= m); }
       return dailyCollectionData;
     }, [acctDateFilter]);
 
@@ -1700,9 +1792,7 @@ export default function App() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div><h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>Accountant</h1></div>
-          {isAdmin && (
-            <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(200,146,10,0.15)", border: "1px solid rgba(200,146,10,0.3)", color: "#f59e0b", padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>🔐 Admin</button>
-          )}
+          {isAdmin && <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(200,146,10,0.15)", border: "1px solid rgba(200,146,10,0.3)", color: "#f59e0b", padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>🔐 Admin</button>}
         </div>
         <div style={{ background: "linear-gradient(135deg,rgba(34,197,94,0.08),rgba(59,130,246,0.06))", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 16, padding: "16px", marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, marginBottom: 12 }}>📅 Today — {fd(todayStr)}</div>
@@ -1768,6 +1858,7 @@ export default function App() {
     const clientFin = useMemo(() => computeClientFinancials(c), [c.id]);
     const myPending = pendingLoans.filter(p => p.clientId === c.id);
     const clientTx = useMemo(() => getClientTransactions(c), [c]);
+    const risk = computeClientRisk(c);
 
     return (
       <div>
@@ -1777,7 +1868,11 @@ export default function App() {
           </button>
           <div style={{ width: 44, height: 44, borderRadius: 12, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
           <div style={{ flexGrow: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: "#e8f4fd" }}>{c.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#e8f4fd" }}>{c.name}</div>
+              {/* PRIORITY 2: Risk badge on detail header */}
+              {activeLoan && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: risk.bg, color: risk.color, fontWeight: 700 }}>{risk.emoji} {risk.label}</span>}
+            </div>
             <div style={{ fontSize: 11, color: "#3a5a70" }}>{c.id}</div>
           </div>
           <button onClick={() => setShowEditClient(c)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#3b82f6", width: 32, height: 32, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1785,17 +1880,34 @@ export default function App() {
           </button>
         </div>
 
-        <div style={{ background: "rgba(100,180,255,0.04)", border: "1px solid rgba(100,180,255,0.08)", borderRadius: 13, padding: "14px 16px", marginBottom: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {[["PHONE", c.phone || "—"], ["ID/BVN", c.idNumber || "—"], ["SAVINGS", <span key="s" style={{ color: "#c084fc", fontWeight: 700 }}>{fc(c.savingsBalance || 0)}</span>], ["OFFICER", c.assignedToName || "—"]].map(([l, v]) => (
-            <div key={l}>
-              <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>{l}</div>
-              <div style={{ color: "#c8dde8", fontSize: 13 }}>{v}</div>
+        {/* PRIORITY 5: Client profile with guarantor info */}
+        <div style={{ background: "rgba(100,180,255,0.04)", border: "1px solid rgba(100,180,255,0.08)", borderRadius: 13, padding: "14px 16px", marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            {[["PHONE", c.phone || "—"], ["ID/BVN", c.idNumber || "—"], ["SAVINGS", <span key="s" style={{ color: "#c084fc", fontWeight: 700 }}>{fc(c.savingsBalance || 0)}</span>], ["OFFICER", c.assignedToName || "—"]].map(([l, v]) => (
+              <div key={l}>
+                <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>{l}</div>
+                <div style={{ color: "#c8dde8", fontSize: 13 }}>{v}</div>
+              </div>
+            ))}
+            <div style={{ gridColumn: "1/-1" }}>
+              <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>ADDRESS</div>
+              <div style={{ color: "#c8dde8", fontSize: 13 }}>{c.address || "—"}</div>
             </div>
-          ))}
-          <div style={{ gridColumn: "1/-1" }}>
-            <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>ADDRESS</div>
-            <div style={{ color: "#c8dde8", fontSize: 13 }}>{c.address || "—"}</div>
           </div>
+          {/* Guarantor section */}
+          {(c.guarantorName || c.guarantorPhone) && (
+            <div style={{ borderTop: "1px solid rgba(100,180,255,0.08)", paddingTop: 10, marginTop: 4 }}>
+              <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 6 }}>🛡️ GUARANTOR</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[["NAME", c.guarantorName || "—"], ["PHONE", c.guarantorPhone || "—"], ["RELATIONSHIP", c.guarantorRelationship || "—"]].map(([l, v]) => (
+                  <div key={l} style={{ gridColumn: l === "RELATIONSHIP" ? "1/-1" : "auto" }}>
+                    <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 2 }}>{l}</div>
+                    <div style={{ color: "#c8dde8", fontSize: 12 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {isAdmin && (
@@ -1834,6 +1946,7 @@ export default function App() {
               <LCC key={loan.id} loan={loan} num={allLoans.length - idx} total={allLoans.length} isAdmin={isAdmin} today={today}
                 onPay={(loan, si) => { setShowPayment({ clientId: c.id, loanId: loan.id, scheduleIdx: si }); setPaymentAmount(loan.dailyPayment.toFixed(2)); setPaymentPreview(null); }}
                 onOverride={(loan, idx2, s) => { setAdminEditInstallment({ client: c, loan, idx: idx2 }); setAdminInstOverride({ paid: s.paid, paidAmount: s.paidAmount || loan.dailyPayment.toFixed(2), dueDate: s.dueDate, paidDate: s.paidDate || todayStr }); }}
+                onRestructure={(loan) => { setShowRestructure(loan); setRestructureInput({ newDailyAmount: loan.dailyPayment.toFixed(2), reason: "" }); }}
               />
             ))}
           </div>
@@ -1952,6 +2065,7 @@ export default function App() {
           </button>
         </div>
       </div>
+
       <div style={{ padding: "20px 16px 100px", maxWidth: 540, margin: "0 auto" }}>
         {view === "dashboard" && (isAdmin && adminMode === "accountant" ? <AccountantView /> : <Dashboard />)}
         {view === "clients" && <ClientsList />}
@@ -1960,6 +2074,7 @@ export default function App() {
         {view === "staff" && isAdmin && <StaffPanel users={users} clients={clients} pendingLoans={pendingLoans} currentUser={currentUser} onUpdateUsers={saveUsers} onApproveLoan={handleApproveLoan} onRejectLoan={handleRejectLoan} showToast={showToast} />}
         {view === "detail" && <Detail />}
       </div>
+
       <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(6,15,26,0.97)", borderTop: "1px solid rgba(100,180,255,0.07)", display: "flex", backdropFilter: "blur(12px)", zIndex: 900 }}>
         {navItems.map(n => {
           const active = view === n.id || (view === "detail" && n.id === "clients");
@@ -1975,7 +2090,8 @@ export default function App() {
         })}
       </div>
 
-      {/* MODALS */}
+      {/* ── MODALS ── */}
+
       {showProfile && (
         <Modal title="🔑 Change Password" onClose={() => setShowProfile(false)}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: 12, background: "rgba(255,255,255,0.03)", borderRadius: 12 }}>
@@ -1985,9 +2101,6 @@ export default function App() {
               <div style={{ fontSize: 12, color: "#3a5a70" }}>@{currentUser.username}</div>
             </div>
           </div>
-          {!isAdmin && (
-            <div style={{ background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 14, fontSize: 12, color: "#60a5fa" }}>ℹ️ Contact admin to change username.</div>
-          )}
           <Field label="Current Password *"><input type="password" style={IS} value={profileEdit.oldPassword} onChange={e => setProfileEdit(p => ({ ...p, oldPassword: e.target.value }))} /></Field>
           <Field label="New Password *"><input type="password" style={IS} value={profileEdit.newPassword} onChange={e => setProfileEdit(p => ({ ...p, newPassword: e.target.value }))} placeholder="Min 4 chars" /></Field>
           <Field label="Confirm *"><input type="password" style={IS} value={profileEdit.confirmPassword} onChange={e => setProfileEdit(p => ({ ...p, confirmPassword: e.target.value }))} /></Field>
@@ -2019,27 +2132,50 @@ export default function App() {
             </Field>
             {paymentPreview && amt > 0 && (
               <div style={{ marginBottom: 14 }}>
-                {isOver && (
-                  <div style={{ background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 12, padding: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa" }}>⚡ Cascade: +{fc(amt - exp)} · {paymentPreview.daysCleared} day{paymentPreview.daysCleared !== 1 ? "s" : ""}</div>
-                  </div>
-                )}
-                {isUnder && (
-                  <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12, padding: 12 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>⚠️ Shortfall: {fc(exp - amt)}</div>
-                  </div>
-                )}
-                {!isOver && !isUnder && (
-                  <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 12, padding: "10px", textAlign: "center" }}>
-                    <span style={{ color: "#4ade80", fontWeight: 700 }}>✓ Exact</span>
-                  </div>
-                )}
+                {isOver && <div style={{ background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa" }}>⚡ Cascade: +{fc(amt - exp)} · {paymentPreview.daysCleared} day{paymentPreview.daysCleared !== 1 ? "s" : ""}</div></div>}
+                {isUnder && <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>⚠️ Shortfall: {fc(exp - amt)}</div></div>}
+                {!isOver && !isUnder && <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 12, padding: "10px", textAlign: "center" }}><span style={{ color: "#4ade80", fontWeight: 700 }}>✓ Exact</span></div>}
               </div>
             )}
             <button onClick={handlePayment} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Confirm {isOver ? "(+Cascade)" : isUnder ? "(Partial)" : ""}</button>
           </Modal>
         );
       })()}
+
+      {/* PRIORITY 4: Restructure Modal */}
+      {showRestructure && (
+        <Modal title="🔄 Restructure Loan" onClose={() => setShowRestructure(null)}>
+          <div style={{ background: "rgba(192,132,252,0.08)", border: "1px solid rgba(192,132,252,0.2)", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: "#c084fc", fontWeight: 700, marginBottom: 4 }}>Current Daily Payment</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "#c084fc", fontFamily: "'Courier New',monospace" }}>{fc(showRestructure.dailyPayment)}</div>
+            <div style={{ fontSize: 10, color: "#7a5a9a", marginTop: 4 }}>
+              Unpaid days: {showRestructure.schedule?.filter(s => !s.paid).length || 0} · 
+              Total unpaid: {fc(showRestructure.schedule?.filter(s => !s.paid).reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0) || 0)}
+            </div>
+          </div>
+          <Field label="New Daily Amount (₦) *">
+            <input type="number" style={IS} value={restructureInput.newDailyAmount} onChange={e => setRestructureInput(p => ({ ...p, newDailyAmount: e.target.value }))} autoFocus />
+          </Field>
+          {restructureInput.newDailyAmount && (() => {
+            const newAmt = parseFloat(restructureInput.newDailyAmount) || 0;
+            const unpaidOwed = showRestructure.schedule?.filter(s => !s.paid).reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0) || 0;
+            const newDays = newAmt > 0 ? Math.ceil(unpaidOwed / newAmt) : 0;
+            return (
+              <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, marginBottom: 4 }}>Preview</div>
+                <div style={{ fontSize: 12, color: "#c8dde8" }}>{newDays} new payment days</div>
+              </div>
+            );
+          })()}
+          <Field label="Reason / Note *">
+            <input style={IS} value={restructureInput.reason} onChange={e => setRestructureInput(p => ({ ...p, reason: e.target.value }))} placeholder="e.g. Client hardship, agreed new terms" />
+          </Field>
+          <div style={{ background: "rgba(245,158,11,0.08)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, fontSize: 11, color: "#f59e0b" }}>
+            ⚠️ This will recalculate the remaining schedule. Past payments are preserved. This action is logged with your name and date.
+          </div>
+          <button onClick={handleRestructure} style={{ width: "100%", background: "linear-gradient(135deg,#c084fc,#a855f7)", border: "none", color: "#fff", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Apply Restructure</button>
+        </Modal>
+      )}
 
       {adminEditInstallment && (
         <Modal title="🛠️ Override" onClose={() => setAdminEditInstallment(null)}>
@@ -2074,22 +2210,36 @@ export default function App() {
         </Modal>
       )}
 
+      {/* PRIORITY 5: Add Client with Guarantor fields */}
       {showAddClient && (
         <Modal title="Register Client" onClose={() => setShowAddClient(false)}>
           <Field label="Name *"><input style={IS} value={newClient.name} onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
           <Field label="Phone *"><input style={IS} value={newClient.phone} onChange={e => setNewClient(p => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label="Address"><input style={IS} value={newClient.address} onChange={e => setNewClient(p => ({ ...p, address: e.target.value }))} /></Field>
           <Field label="ID/BVN"><input style={IS} value={newClient.idNumber} onChange={e => setNewClient(p => ({ ...p, idNumber: e.target.value }))} /></Field>
+          <div style={{ borderTop: "1px solid rgba(245,158,11,0.15)", paddingTop: 14, marginTop: 4, marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 12 }}>🛡️ Guarantor (Optional)</div>
+            <Field label="Guarantor Name"><input style={IS} value={newClient.guarantorName} onChange={e => setNewClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
+            <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
+            <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
+          </div>
           <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Register</button>
         </Modal>
       )}
 
+      {/* PRIORITY 5: Edit Client with Guarantor fields */}
       {showEditClient && (
         <Modal title="Edit Client" onClose={() => setShowEditClient(null)}>
           <Field label="Name"><input style={IS} value={showEditClient.name} onChange={e => setShowEditClient(p => ({ ...p, name: e.target.value }))} /></Field>
           <Field label="Phone"><input style={IS} value={showEditClient.phone} onChange={e => setShowEditClient(p => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label="Address"><input style={IS} value={showEditClient.address || ""} onChange={e => setShowEditClient(p => ({ ...p, address: e.target.value }))} /></Field>
           <Field label="ID/BVN"><input style={IS} value={showEditClient.idNumber || ""} onChange={e => setShowEditClient(p => ({ ...p, idNumber: e.target.value }))} /></Field>
+          <div style={{ borderTop: "1px solid rgba(245,158,11,0.15)", paddingTop: 14, marginTop: 4, marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 12 }}>🛡️ Guarantor</div>
+            <Field label="Guarantor Name"><input style={IS} value={showEditClient.guarantorName || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
+            <Field label="Guarantor Phone"><input style={IS} value={showEditClient.guarantorPhone || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
+            <Field label="Relationship"><input style={IS} value={showEditClient.guarantorRelationship || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
+          </div>
           <button onClick={handleUpdateClient} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Save</button>
         </Modal>
       )}
@@ -2126,14 +2276,8 @@ export default function App() {
             const t = p + (p * r / 100);
             return (
               <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: 12, marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 10, color: "#3a5a70" }}>TOTAL</div>
-                  <div style={{ color: "#4ade80", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t)}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: "#3a5a70" }}>DAILY</div>
-                  <div style={{ color: "#60a5fa", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t / d)}</div>
-                </div>
+                <div><div style={{ fontSize: 10, color: "#3a5a70" }}>TOTAL</div><div style={{ color: "#4ade80", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t)}</div></div>
+                <div><div style={{ fontSize: 10, color: "#3a5a70" }}>DAILY</div><div style={{ color: "#60a5fa", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t / d)}</div></div>
               </div>
             );
           })()}
@@ -2157,9 +2301,16 @@ export default function App() {
             <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 700 }}>☁️ Firebase Synced</div>
             </div>
+            {/* PRIORITY 6: Last backup display in settings */}
+            {isAdmin && (
+              <div style={{ background: "rgba(245,158,11,0.06)", borderRadius: 10, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700 }}>💾 Last Backup</div>
+                <div style={{ fontSize: 11, color: "#7a6030", marginTop: 2 }}>{lastBackupDate ? fd(lastBackupDate) : "Never backed up"}</div>
+              </div>
+            )}
             {isAdmin && (
               <>
-                <button onClick={() => { exportData(); setShowSettings(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📤 Backup</button>
+                <button onClick={() => { exportData(); setShowSettings(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📤 Backup Now</button>
                 <label style={{ display: "block", width: "100%", background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.25)", color: "#60a5fa", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700, textAlign: "center", boxSizing: "border-box" }}>
                   📥 Restore
                   <input type="file" accept=".json" style={{ display: "none" }} onChange={e => {
@@ -2168,16 +2319,9 @@ export default function App() {
                       reader.onload = ev => {
                         try {
                           const d = JSON.parse(ev.target.result);
-                          if (d.clients) {
-                            saveClients(d.clients);
-                            if (d.users) saveUsers(d.users);
-                            if (d.pendingLoans) savePending(d.pendingLoans);
-                            setShowSettings(false);
-                            showToast(`✅ ${d.clients.length} restored!`);
-                          } else showToast("Invalid", "error");
-                        } catch {
-                          showToast("Error", "error");
-                        }
+                          if (d.clients) { saveClients(d.clients); if (d.users) saveUsers(d.users); if (d.pendingLoans) savePending(d.pendingLoans); setShowSettings(false); showToast(`✅ ${d.clients.length} restored!`); }
+                          else showToast("Invalid", "error");
+                        } catch { showToast("Error", "error"); }
                       };
                       reader.readAsText(e.target.files[0]);
                     }
@@ -2204,4 +2348,4 @@ export default function App() {
       )}
     </div>
   );
-                      }
+        }
