@@ -90,53 +90,89 @@ function calcLoanSchedule(principal, rate, days, start, excl) {
 function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   let remaining = amountPaid;
   const updated = schedule.map(s => ({ ...s, paymentLog: [...(s.paymentLog || [])] }));
-  let i = startIdx;
+  const today = new Date();
+
+  // STEP 1: Find all defaulted slots (overdue, unpaid, before startIdx)
+  const defaultedSlots = [];
+  for (let i = 0; i < updated.length; i++) {
+    if (i === startIdx) continue;
+    const s = updated[i];
+    const isDefaulted = !s.paid && new Date(s.dueDate) < today;
+    const gap = s.payment - (s.paidAmount || 0);
+    if (isDefaulted && gap > 0) defaultedSlots.push(i);
+  }
+  // Sort oldest first
+  defaultedSlots.sort((a, b) => new Date(updated[a].dueDate) - new Date(updated[b].dueDate));
+
+  // STEP 2: Settle defaults FIRST with any available money
+  for (const defIdx of defaultedSlots) {
+    if (remaining <= 0) break;
+    const s = updated[defIdx];
+    const owed = s.payment - (s.paidAmount || 0);
+    const here = Math.min(remaining, owed);
+    const newPaid = (s.paidAmount || 0) + here;
+    updated[defIdx].paymentLog.push({
+      amount: here, date: paidDate, by: paidBy || "",
+      at: new Date().toISOString(), cascaded: true, defaultSettlement: true
+    });
+    updated[defIdx] = {
+      ...updated[defIdx],
+      paid: newPaid >= s.payment,
+      paidAmount: newPaid,
+      paidDate: newPaid >= s.payment ? paidDate : s.paidDate,
+      overpayment: 0,
+      shortfall: Math.max(0, s.payment - newPaid)
+    };
+    remaining -= here;
+  }
+
+  // STEP 3: Apply what remains to current slot
+  if (remaining > 0 && startIdx < updated.length) {
+    const s = updated[startIdx];
+    const total = (s.paidAmount || 0) + remaining;
+    const covers = Math.min(total, s.payment);
+    const excess = total - s.payment;
+    updated[startIdx].paymentLog.push({
+      amount: amountPaid, date: paidDate, by: paidBy || "",
+      at: new Date().toISOString()
+    });
+    updated[startIdx] = {
+      ...updated[startIdx],
+      paid: total >= s.payment,
+      paidAmount: covers,
+      paidDate: paidDate,
+      overpayment: Math.max(0, excess),
+      shortfall: Math.max(0, s.payment - total)
+    };
+    remaining = Math.max(0, excess);
+  }
+
+  // STEP 4: Cascade any leftover to future unpaid slots
+  let i = startIdx + 1;
   while (remaining > 0 && i < updated.length) {
     const s = updated[i];
-    if (s.paid && i !== startIdx) { i++; continue; }
-    if (i === startIdx) {
-      const total = (s.paidAmount || 0) + remaining;
-      const covers = Math.min(total, s.payment);
-      const excess = total - s.payment;
-      updated[i].paymentLog.push({
-        amount: amountPaid,
-        date: paidDate,
-        by: paidBy || "",
-        at: new Date().toISOString()
-      });
-      updated[i] = {
-        ...updated[i],
-        paid: total >= s.payment,
-        paidAmount: covers,
-        paidDate: paidDate,
-        overpayment: Math.max(0, excess),
-        shortfall: Math.max(0, s.payment - total)
-      };
-      remaining = Math.max(0, excess);
-    } else if (!s.paid) {
-      const already = s.paidAmount || 0;
-      const owed = s.payment - already;
-      const here = Math.min(remaining, owed);
-      const newPaid = already + here;
-      updated[i].paymentLog.push({
-        amount: here,
-        date: paidDate,
-        by: paidBy || "",
-        at: new Date().toISOString(),
-        cascaded: true
-      });
-      updated[i] = {
-        ...updated[i],
-        paid: newPaid >= s.payment,
-        paidAmount: newPaid,
-        paidDate: newPaid >= s.payment ? paidDate : s.paidDate,
-        overpayment: 0,
-        shortfall: Math.max(0, s.payment - newPaid)
-      };
-      remaining -= here;
-    }
+    if (s.paid) { i++; continue; }
+    const already = s.paidAmount || 0;
+    const owed = s.payment - already;
+    const here = Math.min(remaining, owed);
+    const newPaid = already + here;
+    updated[i].paymentLog.push({
+      amount: here, date: paidDate, by: paidBy || "",
+      at: new Date().toISOString(), cascaded: true
+    });
+    updated[i] = {
+      ...updated[i],
+      paid: newPaid >= s.payment,
+      paidAmount: newPaid,
+      paidDate: newPaid >= s.payment ? paidDate : s.paidDate,
+      overpayment: 0,
+      shortfall: Math.max(0, s.payment - newPaid)
+    };
+    remaining -= here;
     i++;
   }
+
+  // STEP 5: Recalculate running balances
   const totalDue = updated.reduce((sum, s) => sum + s.payment, 0);
   let bal = totalDue;
   for (let j = 0; j < updated.length; j++) {
@@ -373,7 +409,33 @@ function computeMonthlyStats(clientsList, monthKey) {
   };
 }
 
-function computeMonthlyReport(clients) {
+// ─── DEFAULTING CLIENTS REPORT ───────────────────────────────────────────────
+function computeDefaultingClientsReport(clients, monthKey) {
+  const defaulters = [];
+  const today = new Date();
+  clients.forEach(c => {
+    (c.loans || []).forEach(l => {
+      if (l.status !== "active") return;
+      const overdueSlots = (l.schedule || []).filter(s => {
+        const isOverdue = !s.paid && new Date(s.dueDate) < today;
+        const inMonth = (s.dueDate || "").slice(0, 7) === monthKey;
+        return isOverdue && inMonth;
+      });
+      if (overdueSlots.length === 0) return;
+      const totalOwed = overdueSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
+      defaulters.push({
+        clientId: c.id,
+        clientName: c.name,
+        phone: c.phone,
+        daysOverdue: overdueSlots.length,
+        totalOwed,
+        lastDueDate: overdueSlots[overdueSlots.length - 1]?.dueDate,
+        dailyPayment: l.dailyPayment
+      });
+    });
+  });
+  return defaulters.sort((a, b) => b.totalOwed - a.totalOwed);
+}
   const map = {};
   clients.forEach(c => {
     (c.loans || []).forEach(l => {
@@ -648,12 +710,18 @@ function ShortfallBanner({ loan }) {
 // ─── INSTALLMENT ROW ─────────────────────────────────────────────────────────
 function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const [showLog, setShowLog] = useState(false);
+  const [quickAmt, setQuickAmt] = useState("");
   const isSF = !s.paid && s.paidAmount > 0 && s.paidAmount < s.payment;
   const isOD = !s.paid && new Date(s.dueDate) < today;
   const isNext = isActive && !s.paid && loan.schedule.filter(x => !x.paid)[0] === s;
   const isLate = s.paid && s.paidDate > s.dueDate;
   const hasOver = s.overpayment > 0;
   const hasLog = (s.paymentLog || []).length > 0;
+
+  // NEW: Calculate remaining amounts
+  const amountRemaining = Math.max(0, s.payment - (s.paidAmount || 0));
+  const totalRemaining = loan.schedule.filter(x => !x.paid).reduce((sum, x) => sum + (x.payment - (x.paidAmount || 0)), 0);
+  const remainingDays = loan.schedule.filter(x => !x.paid).length;
 
   let border = "rgba(100,180,255,0.06)", bg = "rgba(255,255,255,0.01)";
   if (s.paid) { border = "rgba(34,197,94,0.15)"; bg = "rgba(34,197,94,0.04)"; }
@@ -703,6 +771,41 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
           )}
         </div>
       </div>
+
+      {/* NEW: Amount Remaining + Quick Collect Input */}
+      {!s.paid && isActive && (
+        <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(100,180,255,0.08)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ textAlign: "center", flex: 1 }}>
+              <div style={{ fontSize: 8, color: "#3a5a70", marginBottom: 2 }}>REMAINING</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(amountRemaining)}</div>
+            </div>
+            <div style={{ width: 1, background: "rgba(255,255,255,0.06)", margin: "0 8px" }} />
+            <div style={{ textAlign: "center", flex: 1 }}>
+              <div style={{ fontSize: 8, color: "#3a5a70", marginBottom: 2 }}>TOTAL LEFT</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#f59e0b", fontFamily: "'Courier New',monospace" }}>{fc(totalRemaining)}</div>
+            </div>
+            <div style={{ width: 1, background: "rgba(255,255,255,0.06)", margin: "0 8px" }} />
+            <div style={{ textAlign: "center", flex: 1 }}>
+              <div style={{ fontSize: 8, color: "#3a5a70", marginBottom: 2 }}>DAYS LEFT</div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{remainingDays}d</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8, borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 4, letterSpacing: 0.8 }}>AMOUNT COLLECTED</div>
+              <input type="number" value={quickAmt} onChange={e => setQuickAmt(e.target.value)} placeholder="Enter amount..." style={{ ...IS, padding: "8px 12px", fontSize: 14, fontWeight: 700, fontFamily: "'Courier New',monospace", color: "#4ade80", borderColor: quickAmt ? "rgba(34,197,94,0.4)" : "rgba(100,180,255,0.15)", background: quickAmt ? "rgba(34,197,94,0.05)" : "rgba(100,180,255,0.05)" }} />
+              {quickAmt && parseFloat(quickAmt) > 0 && (
+                <div style={{ fontSize: 9, color: parseFloat(quickAmt) >= amountRemaining ? "#4ade80" : "#f59e0b", marginTop: 4 }}>
+                  {parseFloat(quickAmt) >= amountRemaining ? `✓ Covers day${parseFloat(quickAmt) > amountRemaining ? ` (+${fc(parseFloat(quickAmt) - amountRemaining)} extra)` : ""}` : `⚠ Short by ${fc(amountRemaining - parseFloat(quickAmt))}`}
+                </div>
+              )}
+            </div>
+            <button onClick={e => { e.stopPropagation(); if (quickAmt && parseFloat(quickAmt) > 0) { onPay(loan, i, parseFloat(quickAmt)); setQuickAmt(""); } }} style={{ background: quickAmt && parseFloat(quickAmt) > 0 ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)", border: "none", color: quickAmt && parseFloat(quickAmt) > 0 ? "#000" : "#3a5a70", padding: "10px 14px", borderRadius: 8, cursor: quickAmt ? "pointer" : "default", fontWeight: 800, fontSize: 12, whiteSpace: "nowrap" }}>✓ Collect</button>
+          </div>
+        </div>
+      )}
+
       {showLog && hasLog && (
         <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 10 }}>
           <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 8 }}>📋 Payment Details</div>
@@ -710,7 +813,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
             <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 10px", background: pl.cascaded ? "rgba(167,139,250,0.06)" : "rgba(34,197,94,0.04)", border: `1px solid ${pl.cascaded ? "rgba(167,139,250,0.15)" : "rgba(34,197,94,0.1)"}`, borderRadius: 8, marginBottom: 5 }}>
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: pl.cascaded ? "#a78bfa" : "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(pl.amount)}</div>
-                <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>{fd(pl.date)}{pl.by ? ` · ${pl.by}` : ""}{pl.cascaded ? " · Cascaded" : ""}</div>
+                <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>{fd(pl.date)}{pl.by ? ` · ${pl.by}` : ""}{pl.cascaded ? (pl.defaultSettlement ? " · Default settled" : " · Cascaded") : ""}</div>
               </div>
               <div style={{ fontSize: 16 }}>{pl.cascaded ? "⚡" : "✓"}</div>
             </div>
@@ -1151,7 +1254,7 @@ export default function App() {
   const [expandFinancials, setExpandFinancials] = useState(true);
   const [acctDateFilter, setAcctDateFilter] = useState("today");
   const [acctSelectedDay, setAcctSelectedDay] = useState(null);
-  const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "" });
+  const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "", occupation: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "", guarantorOccupation: "" });
   const [newLoan, setNewLoan] = useState({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
   // Priority 4 - Restructure
   const [showRestructure, setShowRestructure] = useState(null);
@@ -1243,23 +1346,33 @@ export default function App() {
   }, [clients, visibleClients, isAdmin]);
 
   const dailyCollectionData = useMemo(() => {
-    const src = isAdmin ? clients : visibleClients;
-    const map = {};
-    src.forEach(c => {
-      (c.loans || []).forEach(l => {
-        (l.schedule || []).forEach(s => {
-          const due = s.dueDate;
-          if (!due) return;
-          if (!map[due]) map[due] = { date: due, expected: 0, collected: 0, installments: [] };
+  const src = isAdmin ? clients : visibleClients;
+  const map = {};
+  src.forEach(c => {
+    (c.loans || []).forEach(l => {
+      // Skip fully completed loans — they should not appear in daily collections
+      if (l.status === "completed") return;
+      (l.schedule || []).forEach(s => {
+        const due = s.dueDate;
+        if (!due) return;
+        if (!map[due]) map[due] = { date: due, expected: 0, collected: 0, installments: [] };
+        // Only count as expected if not yet paid
+        if (!s.paid) {
           map[due].expected += s.payment || 0;
-          map[due].collected += s.paidAmount || 0;
-          map[due].installments.push({ clientName: c.name, clientId: c.id, day: s.day, totalDays: l.days, payment: s.payment, paidAmount: s.paidAmount || 0, paid: s.paid, paidDate: s.paidDate, dueDate: s.dueDate });
+        }
+        if (s.paidAmount > 0) map[due].collected += s.paidAmount;
+        map[due].installments.push({ 
+          clientName: c.name, clientId: c.id, day: s.day, 
+          totalDays: l.days, payment: s.payment, 
+          paidAmount: s.paidAmount || 0, paid: s.paid, 
+          paidDate: s.paidDate, dueDate: s.dueDate,
+          loanStatus: l.status
         });
       });
     });
-    return Object.values(map).sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [clients, visibleClients, isAdmin]);
-
+  });
+  return Object.values(map).sort((a, b) => new Date(b.date) - new Date(a.date));
+}, [clients, visibleClients, isAdmin]);
   // PRIORITY 3: Today's route data for officers
   const todayRoute = useMemo(() => {
     const src = visibleClients;
@@ -1360,24 +1473,24 @@ export default function App() {
 
   const handleRejectLoan = id => { savePending(pendingLoans.filter(p => p.id !== id)); showToast("Rejected", "error"); };
 
-  const handlePayment = () => {
-    const amount = parseFloat(paymentAmount);
-    if (!amount || !showPayment) return;
-    const { clientId, loanId, scheduleIdx } = showPayment;
-    saveClients(clients.map(c => {
-      if (c.id !== clientId) return c;
-      return {
-        ...c,
-        loans: c.loans.map(l => {
-          if (l.id !== loanId) return l;
-          const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
-          return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
-        })
-      };
-    }));
-    setPaymentAmount(""); setShowPayment(null); setPaymentPreview(null);
-    showToast("Payment recorded!");
-  };
+  const handlePayment = (customAmount) => {
+  const amount = customAmount || parseFloat(paymentAmount);
+  if (!amount || !showPayment) return;
+  const { clientId, loanId, scheduleIdx } = showPayment;
+  saveClients(clients.map(c => {
+    if (c.id !== clientId) return c;
+    return {
+      ...c,
+      loans: c.loans.map(l => {
+        if (l.id !== loanId) return l;
+        const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
+        return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
+      })
+    };
+  }));
+  setPaymentAmount(""); setShowPayment(null); setPaymentPreview(null);
+  showToast("Payment recorded!");
+};
 
   // PRIORITY 4: Handle restructure
   const handleRestructure = () => {
@@ -1650,6 +1763,26 @@ export default function App() {
                     <div style={{ fontWeight: 700, color: "#e8f4fd", fontSize: 13 }}>{fm(item.month)}</div>
                     <div style={{ fontSize: 11, color: "#3a5a70" }}>{item.loanCount} loan{item.loanCount !== 1 ? "s" : ""} · {item.clientCount} client{item.clientCount !== 1 ? "s" : ""}</div>
                   </div>
+                 {/* DEFAULTING CLIENTS UNDER MONTHLY REPORT */}
+{computeDefaultingClientsReport(clients, curMonthKey).length > 0 && (
+  <div style={{ marginTop: 16, padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12 }}>
+    <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+      ⚠️ Defaulting Clients — {fm(curMonthKey)}
+    </div>
+    {computeDefaultingClientsReport(clients, curMonthKey).map(d => (
+      <div key={d.clientId} onClick={() => { setSelectedClientId(d.clientId); setView("detail"); }} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd" }}>{d.clientName}</div>
+          <div style={{ fontSize: 10, color: "#7a3a3a", marginTop: 2 }}>{d.phone} · {d.daysOverdue} day{d.daysOverdue !== 1 ? "s" : ""} overdue</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(d.totalOwed)}</div>
+          <div style={{ fontSize: 9, color: "#5a3030" }}>owed</div>
+        </div>
+      </div>
+    ))}
+  </div>
+)}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
                     {[["DISBURSED", item.disbursed, "#93c5fd"], ["COLLECTED", item.collected, "#4ade80"], ["INTEREST", item.interest, "#c4b5fd"], ["OUTSTANDING", item.outstanding, "#f87171"]].map(([l, v, c]) => (
                       <div key={l}>
@@ -1944,7 +2077,7 @@ export default function App() {
           <div>
             {allLoans.map((loan, idx) => (
               <LCC key={loan.id} loan={loan} num={allLoans.length - idx} total={allLoans.length} isAdmin={isAdmin} today={today}
-                onPay={(loan, si) => { setShowPayment({ clientId: c.id, loanId: loan.id, scheduleIdx: si }); setPaymentAmount(loan.dailyPayment.toFixed(2)); setPaymentPreview(null); }}
+                onPay={(loan, i, customAmt) => { setShowPayment({ clientId: c.id, loanId: loan.id, scheduleIdx: si }); setPaymentAmount(loan.dailyPayment.toFixed(2)); setPaymentPreview(null); }}
                 onOverride={(loan, idx2, s) => { setAdminEditInstallment({ client: c, loan, idx: idx2 }); setAdminInstOverride({ paid: s.paid, paidAmount: s.paidAmount || loan.dailyPayment.toFixed(2), dueDate: s.dueDate, paidDate: s.paidDate || todayStr }); }}
                 onRestructure={(loan) => { setShowRestructure(loan); setRestructureInput({ newDailyAmount: loan.dailyPayment.toFixed(2), reason: "" }); }}
               />
@@ -2116,7 +2249,7 @@ export default function App() {
         const isOver = amt > exp;
         const isUnder = amt > 0 && amt < exp;
         return (
-          <Modal title="Record Payment" onClose={() => { setShowPayment(null); setPaymentAmount(""); setPaymentPreview(null); }}>
+          <Modal title="Record Payment" onClose={() => { setShowPayment(null); setPaymentAmount("");if (customAmt) { handlePayment(customAmt); return; } setPaymentPreview(null); }}>
             <div style={{ textAlign: "center", marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: "#3a5a70" }}>Expected</div>
               <div style={{ fontSize: 26, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(exp)}</div>
@@ -2216,6 +2349,9 @@ export default function App() {
           <Field label="Name *"><input style={IS} value={newClient.name} onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
           <Field label="Phone *"><input style={IS} value={newClient.phone} onChange={e => setNewClient(p => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label="Address"><input style={IS} value={newClient.address} onChange={e => setNewClient(p => ({ ...p, address: e.target.value }))} /></Field>
+          <Field label="Occupation">
+  <input style={IS} value={newClient.occupation} onChange={e => setNewClient(p => ({ ...p, occupation: e.target.value }))} placeholder="e.g. Trader, Teacher, Farmer" />
+</Field>
           <Field label="ID/BVN"><input style={IS} value={newClient.idNumber} onChange={e => setNewClient(p => ({ ...p, idNumber: e.target.value }))} /></Field>
           <div style={{ borderTop: "1px solid rgba(245,158,11,0.15)", paddingTop: 14, marginTop: 4, marginBottom: 4 }}>
             <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 12 }}>🛡️ Guarantor (Optional)</div>
@@ -2223,6 +2359,9 @@ export default function App() {
             <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
             <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
           </div>
+          <Field label="Guarantor Occupation">
+  <input style={IS} value={newClient.guarantorOccupation} onChange={e => setNewClient(p => ({ ...p, guarantorOccupation: e.target.value }))} placeholder="e.g. Civil Servant, Business Owner" />
+</Field>
           <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Register</button>
         </Modal>
       )}
