@@ -71,28 +71,21 @@ function calcLoanSchedule(principal, rate, days, start, excl) {
   for (let i = 0; i < days; i++) {
     bal = Math.max(0, bal - daily);
     schedule.push({
-      day: i + 1,
-      dueDate: repDays[i],
-      payment: daily,
-      balance: bal,
-      paid: false,
-      paidDate: null,
-      paidAmount: 0,
-      overpayment: 0,
-      shortfall: 0,
-      paymentLog: []
+      day: i + 1, dueDate: repDays[i], payment: daily,
+      balance: bal, paid: false, paidDate: null,
+      paidAmount: 0, overpayment: 0, shortfall: 0, paymentLog: []
     });
   }
   return { dailyPayment: daily, totalRepayable: total, totalInterest: interest, schedule };
 }
 
-// ─── SMART PAYMENT ENGINE ────────────────────────────────────────────────────
+// ─── SMART PAYMENT ENGINE (defaults settled first) ───────────────────────────
 function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   let remaining = amountPaid;
   const updated = schedule.map(s => ({ ...s, paymentLog: [...(s.paymentLog || [])] }));
   const today = new Date();
 
-  // STEP 1: Find all defaulted slots (overdue, unpaid, before startIdx)
+  // Find all defaulted slots (overdue + unpaid, before startIdx)
   const defaultedSlots = [];
   for (let i = 0; i < updated.length; i++) {
     if (i === startIdx) continue;
@@ -101,10 +94,9 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     const gap = s.payment - (s.paidAmount || 0);
     if (isDefaulted && gap > 0) defaultedSlots.push(i);
   }
-  // Sort oldest first
   defaultedSlots.sort((a, b) => new Date(updated[a].dueDate) - new Date(updated[b].dueDate));
 
-  // STEP 2: Settle defaults FIRST with any available money
+  // Settle defaults first
   for (const defIdx of defaultedSlots) {
     if (remaining <= 0) break;
     const s = updated[defIdx];
@@ -126,7 +118,7 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     remaining -= here;
   }
 
-  // STEP 3: Apply what remains to current slot
+  // Apply to current slot
   if (remaining > 0 && startIdx < updated.length) {
     const s = updated[startIdx];
     const total = (s.paidAmount || 0) + remaining;
@@ -147,7 +139,7 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     remaining = Math.max(0, excess);
   }
 
-  // STEP 4: Cascade any leftover to future unpaid slots
+  // Cascade leftover to future
   let i = startIdx + 1;
   while (remaining > 0 && i < updated.length) {
     const s = updated[i];
@@ -172,7 +164,7 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     i++;
   }
 
-  // STEP 5: Recalculate running balances
+  // Recalculate balances
   const totalDue = updated.reduce((sum, s) => sum + s.payment, 0);
   let bal = totalDue;
   for (let j = 0; j < updated.length; j++) {
@@ -182,7 +174,7 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   return updated;
 }
 
-// ─── PRIORITY 4: LOAN RESTRUCTURE ENGINE ─────────────────────────────────────
+// ─── LOAN RESTRUCTURE ────────────────────────────────────────────────────────
 function restructureLoan(loan, newDailyAmount, reason, approvedBy) {
   const unpaidSlots = loan.schedule.filter(s => !s.paid);
   const totalUnpaidOwed = unpaidSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
@@ -195,39 +187,23 @@ function restructureLoan(loan, newDailyAmount, reason, approvedBy) {
   for (let i = 0; i < newDays; i++) {
     bal = Math.max(0, bal - newDailyAmount);
     newSchedule.push({
-      day: paidSlots.length + i + 1,
-      dueDate: newRepayDays[i],
-      payment: newDailyAmount,
-      balance: bal,
-      paid: false,
-      paidDate: null,
-      paidAmount: 0,
-      overpayment: 0,
-      shortfall: 0,
-      paymentLog: [],
-      restructured: true
+      day: paidSlots.length + i + 1, dueDate: newRepayDays[i],
+      payment: newDailyAmount, balance: bal, paid: false, paidDate: null,
+      paidAmount: 0, overpayment: 0, shortfall: 0, paymentLog: [], restructured: true
     });
   }
   const newTotal = paidSlots.reduce((s, x) => s + x.paidAmount, 0) + totalUnpaidOwed;
   return {
-    ...loan,
-    schedule: newSchedule,
-    days: newSchedule.length,
-    dailyPayment: newDailyAmount,
-    totalRepayable: newTotal,
+    ...loan, schedule: newSchedule, days: newSchedule.length,
+    dailyPayment: newDailyAmount, totalRepayable: newTotal,
     restructureLog: [...(loan.restructureLog || []), {
-      date: todayStr,
-      reason,
-      approvedBy,
-      newDailyAmount,
-      newDays,
-      totalUnpaidOwed,
+      date: todayStr, reason, approvedBy, newDailyAmount, newDays, totalUnpaidOwed,
       at: new Date().toISOString()
     }]
   };
 }
 
-// ─── PRIORITY 1: SHORTFALL CALCULATOR ────────────────────────────────────────
+// ─── SHORTFALL CALCULATOR ────────────────────────────────────────────────────
 function computeTotalShortfall(loan) {
   const today = new Date();
   let totalShortfall = 0;
@@ -235,59 +211,40 @@ function computeTotalShortfall(loan) {
   (loan.schedule || []).forEach(s => {
     if (!s.paid && s.paidAmount >= 0 && new Date(s.dueDate) <= today) {
       const gap = s.payment - (s.paidAmount || 0);
-      if (gap > 0) {
-        totalShortfall += gap;
-        shortfallDays++;
-      }
-    }
-    if (s.shortfall > 0 && !s.paid) {
-      // already counted via above logic
+      if (gap > 0) { totalShortfall += gap; shortfallDays++; }
     }
   });
-  // Also count partial paid days
   (loan.schedule || []).forEach(s => {
     if (!s.paid && s.paidAmount > 0 && s.paidAmount < s.payment) {
       const gap = s.payment - s.paidAmount;
-      if (gap > 0 && new Date(s.dueDate) > today) {
-        totalShortfall += gap;
-        shortfallDays++;
-      }
+      if (gap > 0 && new Date(s.dueDate) > today) { totalShortfall += gap; shortfallDays++; }
     }
   });
   return { totalShortfall, shortfallDays };
 }
 
-// ─── PRIORITY 2: RISK FLAG SYSTEM ────────────────────────────────────────────
+// ─── RISK FLAGS ──────────────────────────────────────────────────────────────
 function computeClientRisk(client) {
   const activeLoan = client.loans?.find(l => l.status === "active");
   if (!activeLoan) return { level: "none", label: "No Loan", color: "#3a5a70", bg: "rgba(100,130,150,0.08)", emoji: "⚪" };
   const today = new Date();
   const schedule = activeLoan.schedule || [];
-  let consecutiveShortfalls = 0;
-  let maxConsecutive = 0;
-  let totalShortfallDays = 0;
-  let latePayments = 0;
-  let overdueCount = 0;
-
+  let consecutiveShortfalls = 0, maxConsecutive = 0, totalShortfallDays = 0, latePayments = 0, overdueCount = 0;
   schedule.forEach(s => {
     const due = new Date(s.dueDate);
     if (!s.paid && due < today) {
-      overdueCount++;
-      consecutiveShortfalls++;
+      overdueCount++; consecutiveShortfalls++;
       maxConsecutive = Math.max(maxConsecutive, consecutiveShortfalls);
       totalShortfallDays++;
     } else if (s.paid && s.paidDate > s.dueDate) {
-      latePayments++;
-      consecutiveShortfalls = 0;
+      latePayments++; consecutiveShortfalls = 0;
     } else if (!s.paid && s.paidAmount > 0 && s.paidAmount < s.payment) {
-      totalShortfallDays++;
-      consecutiveShortfalls++;
+      totalShortfallDays++; consecutiveShortfalls++;
       maxConsecutive = Math.max(maxConsecutive, consecutiveShortfalls);
     } else if (s.paid) {
       consecutiveShortfalls = 0;
     }
   });
-
   if (maxConsecutive >= 3 || overdueCount >= 3) {
     return { level: "red", label: "High Risk", color: "#ef4444", bg: "rgba(239,68,68,0.12)", emoji: "🔴" };
   } else if (maxConsecutive >= 1 || latePayments >= 2 || totalShortfallDays >= 2) {
@@ -295,6 +252,32 @@ function computeClientRisk(client) {
   } else {
     return { level: "green", label: "On Track", color: "#22c55e", bg: "rgba(34,197,94,0.12)", emoji: "🟢" };
   }
+}
+
+// ─── DEFAULTERS ──────────────────────────────────────────────────────────────
+function computeDefaultingClientsReport(clients, monthKey) {
+  const defaulters = [];
+  const today = new Date();
+  clients.forEach(c => {
+    (c.loans || []).forEach(l => {
+      if (l.status !== "active") return;
+      const overdueSlots = (l.schedule || []).filter(s => {
+        const isOverdue = !s.paid && new Date(s.dueDate) < today;
+        const inMonth = monthKey ? (s.dueDate || "").slice(0, 7) === monthKey : true;
+        return isOverdue && inMonth;
+      });
+      if (overdueSlots.length === 0) return;
+      const totalOwed = overdueSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
+      defaulters.push({
+        clientId: c.id, clientName: c.name, phone: c.phone,
+        daysOverdue: overdueSlots.length, totalOwed,
+        lastDueDate: overdueSlots[overdueSlots.length - 1]?.dueDate,
+        dailyPayment: l.dailyPayment,
+        risk: computeClientRisk(c)
+      });
+    });
+  });
+  return defaulters.sort((a, b) => b.totalOwed - a.totalOwed);
 }
 
 // ─── FINANCIAL ENGINES ───────────────────────────────────────────────────────
@@ -409,33 +392,7 @@ function computeMonthlyStats(clientsList, monthKey) {
   };
 }
 
-// ─── DEFAULTING CLIENTS REPORT ───────────────────────────────────────────────
-function computeDefaultingClientsReport(clients, monthKey) {
-  const defaulters = [];
-  const today = new Date();
-  clients.forEach(c => {
-    (c.loans || []).forEach(l => {
-      if (l.status !== "active") return;
-      const overdueSlots = (l.schedule || []).filter(s => {
-        const isOverdue = !s.paid && new Date(s.dueDate) < today;
-        const inMonth = (s.dueDate || "").slice(0, 7) === monthKey;
-        return isOverdue && inMonth;
-      });
-      if (overdueSlots.length === 0) return;
-      const totalOwed = overdueSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
-      defaulters.push({
-        clientId: c.id,
-        clientName: c.name,
-        phone: c.phone,
-        daysOverdue: overdueSlots.length,
-        totalOwed,
-        lastDueDate: overdueSlots[overdueSlots.length - 1]?.dueDate,
-        dailyPayment: l.dailyPayment
-      });
-    });
-  });
-  return defaulters.sort((a, b) => b.totalOwed - a.totalOwed);
-}
+function computeMonthlyReport(clients) {
   const map = {};
   clients.forEach(c => {
     (c.loans || []).forEach(l => {
@@ -534,7 +491,6 @@ function getClientTransactions(client) {
 const DEFAULT_USERS = [
   { id: "admin_001", username: "Yebaba", password: "Go5win619$", role: "admin", name: "Admin", createdAt: "2026-04-21", active: true }
 ];
-
 // ─── ICONS ───────────────────────────────────────────────────────────────────
 const Icon = ({ name, size = 16 }) => {
   const icons = {
@@ -593,16 +549,6 @@ function Field({ label, children }) {
 
 const IS = { width: "100%", padding: "10px 13px", background: "rgba(100,180,255,0.05)", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 10, color: "#e8f4fd", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
 
-function SC({ label, value, accent, sub }) {
-  return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "16px 18px", borderTop: `2px solid ${accent}` }}>
-      <div style={{ fontSize: 10, color: "#4a6880", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 7 }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 800, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{value}</div>
-      {sub && <div style={{ fontSize: 10, color: "#3a5060", marginTop: 3 }}>{sub}</div>}
-    </div>
-  );
-}
-
 function Badge({ color, bg, children }) {
   return <span style={{ fontSize: 10, padding: "2px 9px", borderRadius: 20, background: bg, color, fontWeight: 700 }}>{children}</span>;
 }
@@ -617,6 +563,241 @@ function Toast({ msg, type }) {
   if (!msg) return null;
   return (
     <div style={{ position: "fixed", top: 70, left: "50%", transform: "translateX(-50%)", background: type === "error" ? "rgba(248,113,113,0.15)" : "rgba(34,197,94,0.15)", border: `1px solid ${type === "error" ? "rgba(248,113,113,0.3)" : "rgba(34,197,94,0.3)"}`, color: type === "error" ? "#f87171" : "#4ade80", padding: "10px 20px", borderRadius: 12, zIndex: 9999, fontWeight: 700, fontSize: 13, backdropFilter: "blur(8px)" }}>{msg}</div>
+  );
+}
+
+// ─── NEW: MODERN STAT CARD ──────────────────────────────────────────────────
+function ModernStatCard({ label, value, icon, gradient, danger, badge }) {
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
+      border: "1px solid rgba(255,255,255,0.06)",
+      borderRadius: 16, padding: "14px 15px",
+      position: "relative", overflow: "hidden", minHeight: 100
+    }}>
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0, height: 3,
+        background: gradient
+      }} />
+      <div style={{
+        width: 32, height: 32, borderRadius: 9,
+        background: gradient, display: "flex",
+        alignItems: "center", justifyContent: "center",
+        fontSize: 15, marginBottom: 10
+      }}>{icon}</div>
+      <div style={{
+        fontSize: 9, color: "#5a7a90", letterSpacing: 1,
+        textTransform: "uppercase", fontWeight: 700, marginBottom: 4
+      }}>{label}</div>
+      <div style={{
+        fontSize: 15, fontWeight: 900,
+        color: danger ? "#f87171" : "#ffffff",
+        fontFamily: "'Courier New',monospace", letterSpacing: -0.3
+      }}>{value}</div>
+      {badge && (
+        <div style={{
+          marginTop: 6, fontSize: 9, color: "#4ade80",
+          fontWeight: 700, display: "inline-block",
+          padding: "2px 6px", background: "rgba(74,222,128,0.1)", borderRadius: 5
+        }}>{badge}</div>
+      )}
+    </div>
+  );
+}
+
+// ─── NEW: METRIC ROW ────────────────────────────────────────────────────────
+function MetricRow({ icon, label, value, color }) {
+  return (
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "12px 14px", background: "rgba(255,255,255,0.02)",
+      borderRadius: 11, border: "1px solid rgba(255,255,255,0.04)"
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 8,
+          background: `${color}15`, display: "flex",
+          alignItems: "center", justifyContent: "center", fontSize: 14
+        }}>{icon}</div>
+        <div style={{ fontSize: 12, color: "#8ab4c8", fontWeight: 500 }}>{label}</div>
+      </div>
+      <div style={{
+        fontSize: 14, fontWeight: 800, color: color,
+        fontFamily: "'Courier New',monospace"
+      }}>{value}</div>
+    </div>
+  );
+}
+
+// ─── NEW: MODERN PORTFOLIO CARD ─────────────────────────────────────────────
+function ModernPortfolioCard({ fin, expanded, onToggle }) {
+  const rc = fin.realROI >= 20 ? "#22c55e" : fin.realROI >= 10 ? "#f59e0b" : "#ef4444";
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(16,30,50,0.9), rgba(10,20,40,0.95))",
+      border: "1px solid rgba(100,180,255,0.15)",
+      borderRadius: 18, overflow: "hidden", marginBottom: 20,
+      boxShadow: "0 8px 32px rgba(0,0,0,0.3)"
+    }}>
+      <div onClick={onToggle} style={{
+        background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(34,197,94,0.1))",
+        padding: "16px 18px",
+        borderBottom: expanded ? "1px solid rgba(100,180,255,0.1)" : "none",
+        display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: "linear-gradient(135deg, #1e40af, #3b82f6)",
+            display: "flex", alignItems: "center", justifyContent: "center"
+          }}><Icon name="trend" size={17} /></div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#e8f4fd" }}>Portfolio Intelligence</div>
+            <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 2 }}>Real-time financial performance</div>
+          </div>
+        </div>
+        <button style={{
+          background: "rgba(100,180,255,0.12)", border: "none",
+          borderRadius: 9, color: "#60a5fa", padding: "7px 14px",
+          fontSize: 11, cursor: "pointer", fontWeight: 700
+        }}>{expanded ? "Hide ▲" : "Show ▼"}</button>
+      </div>
+      {expanded && (
+        <div style={{ padding: "16px 18px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+            <MetricRow icon="🛡️" label="Capital Deployed" value={fc(fin.totalCapital)} color="#60a5fa" />
+            <MetricRow icon="⚠️" label="Outstanding Principal" value={fc(fin.outstandingPrincipal)} color={fin.outstandingPrincipal > 0 ? "#f87171" : "#4ade80"} />
+            <MetricRow icon="📈" label="Interest Earned" value={fc(fin.interestEarned)} color="#c4b5fd" />
+          </div>
+          <div style={{
+            padding: "16px 18px",
+            background: "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(22,163,74,0.08))",
+            borderRadius: 14, border: "1px solid rgba(34,197,94,0.25)",
+            marginBottom: 12
+          }}>
+            <div style={{
+              fontSize: 10, color: "#4ade80", fontWeight: 700,
+              letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6
+            }}>💰 True Profit</div>
+            <div style={{
+              fontSize: 24, fontWeight: 900, color: "#22c55e",
+              fontFamily: "'Courier New',monospace", letterSpacing: -0.5
+            }}>{fc(fin.trueProfit)}</div>
+          </div>
+          <div style={{
+            padding: "16px 18px",
+            background: `linear-gradient(135deg, ${rc}12, ${rc}05)`,
+            borderRadius: 14, border: `1px solid ${rc}30`
+          }}>
+            <div style={{
+              display: "flex", justifyContent: "space-between",
+              alignItems: "center", marginBottom: 10
+            }}>
+              <div>
+                <div style={{ fontSize: 10, color: rc, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase" }}>Return on Investment</div>
+                <div style={{ fontSize: 9, color: "#5a7a90", marginTop: 3 }}>
+                  {fin.realROI >= 20 ? "🚀 Excellent" : fin.realROI >= 10 ? "📊 Healthy" : "⚠️ Below target"}
+                </div>
+              </div>
+              <div style={{
+                background: `${rc}25`, borderRadius: 10,
+                padding: "6px 14px", border: `1px solid ${rc}40`
+              }}>
+                <span style={{ fontSize: 20, fontWeight: 900, color: rc, fontFamily: "'Courier New',monospace" }}>{fin.realROI.toFixed(2)}%</span>
+              </div>
+            </div>
+            <div style={{ height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 6, overflow: "hidden" }}>
+              <div style={{
+                height: "100%", width: `${Math.min(Math.max(fin.realROI, 0), 100)}%`,
+                background: `linear-gradient(90deg, ${rc}, ${rc}cc)`,
+                borderRadius: 6, transition: "width 0.6s ease-out"
+              }} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NEW: DEFAULTERS SECTION ────────────────────────────────────────────────
+function DefaultersSection({ clients, monthKey, onSelectClient }) {
+  const [expanded, setExpanded] = useState(false);
+  const defaulters = useMemo(() => computeDefaultingClientsReport(clients, monthKey), [clients, monthKey]);
+  if (defaulters.length === 0) return null;
+  const totalOwed = defaulters.reduce((s, d) => s + d.totalOwed, 0);
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(220,38,38,0.04))",
+      border: "1px solid rgba(239,68,68,0.25)",
+      borderRadius: 18, padding: 18, marginBottom: 20
+    }}>
+      <div onClick={() => setExpanded(!expanded)} style={{
+        display: "flex", justifyContent: "space-between",
+        alignItems: "center", cursor: "pointer"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: "linear-gradient(135deg, #7f1d1d, #dc2626)",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16
+          }}>⚠️</div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#f87171" }}>
+              {defaulters.length} Defaulting Client{defaulters.length !== 1 ? "s" : ""}
+            </div>
+            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 2 }}>
+              Total owed: <span style={{ fontWeight: 800, color: "#ef4444", fontFamily: "'Courier New',monospace" }}>{fc(totalOwed)}</span>
+            </div>
+          </div>
+        </div>
+        <button style={{
+          background: "rgba(239,68,68,0.15)", border: "none",
+          borderRadius: 9, color: "#f87171", padding: "7px 12px",
+          fontSize: 11, cursor: "pointer", fontWeight: 700
+        }}>{expanded ? "▲" : "▼"}</button>
+      </div>
+      {expanded && (
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          {defaulters.map(d => (
+            <div key={d.clientId} onClick={() => onSelectClient(d.clientId)} style={{
+              background: "rgba(0,0,0,0.25)",
+              border: "1px solid rgba(239,68,68,0.15)",
+              borderRadius: 12, padding: "12px 14px", cursor: "pointer",
+              display: "flex", justifyContent: "space-between", alignItems: "center"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{
+                  width: 34, height: 34, borderRadius: 9,
+                  background: "linear-gradient(135deg, #7f1d1d, #dc2626)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 800, color: "#fff", fontSize: 13
+                }}>{d.clientName.charAt(0)}</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>{d.clientName}</div>
+                  <div style={{ fontSize: 10, color: "#7a3a3a" }}>{d.phone} · {d.daysOverdue}d overdue</div>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(d.totalOwed)}</div>
+                <div style={{ fontSize: 9, color: "#5a3030", marginTop: 2 }}>{d.risk.emoji} {d.risk.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SC({ label, value, accent, sub }) {
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "16px 18px", borderTop: `2px solid ${accent}` }}>
+      <div style={{ fontSize: 10, color: "#4a6880", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 7 }}>{label}</div>
+      <div style={{ fontSize: 19, fontWeight: 800, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: "#3a5060", marginTop: 3 }}>{sub}</div>}
+    </div>
   );
 }
 
@@ -690,7 +871,6 @@ function FP({ fin, isClient, expandFinancials, setExpandFinancials }) {
   );
 }
 
-// ─── PRIORITY 1: SHORTFALL BANNER ────────────────────────────────────────────
 function ShortfallBanner({ loan }) {
   const { totalShortfall, shortfallDays } = computeTotalShortfall(loan);
   if (totalShortfall <= 0) return null;
@@ -699,7 +879,7 @@ function ShortfallBanner({ loan }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontSize: 11, color: "#f87171", fontWeight: 700, marginBottom: 2 }}>⚠️ TOTAL SHORTFALL OWED</div>
-          <div style={{ fontSize: 9, color: "#7a3a3a" }}>{shortfallDays} day{shortfallDays !== 1 ? "s" : ""} with unpaid gaps — above normal schedule</div>
+          <div style={{ fontSize: 9, color: "#7a3a3a" }}>{shortfallDays} day{shortfallDays !== 1 ? "s" : ""} with unpaid gaps</div>
         </div>
         <div style={{ fontSize: 20, fontWeight: 900, color: "#ef4444", fontFamily: "'Courier New',monospace" }}>{fc(totalShortfall)}</div>
       </div>
@@ -707,7 +887,7 @@ function ShortfallBanner({ loan }) {
   );
 }
 
-// ─── INSTALLMENT ROW ─────────────────────────────────────────────────────────
+// ─── INSTALLMENT ROW (with new Amount Remaining + Input) ─────────────────────
 function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const [showLog, setShowLog] = useState(false);
   const [quickAmt, setQuickAmt] = useState("");
@@ -718,7 +898,6 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const hasOver = s.overpayment > 0;
   const hasLog = (s.paymentLog || []).length > 0;
 
-  // NEW: Calculate remaining amounts
   const amountRemaining = Math.max(0, s.payment - (s.paidAmount || 0));
   const totalRemaining = loan.schedule.filter(x => !x.paid).reduce((sum, x) => sum + (x.payment - (x.paidAmount || 0)), 0);
   const remainingDays = loan.schedule.filter(x => !x.paid).length;
@@ -738,9 +917,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
           </div>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: s.paid ? "#4ade80" : isSF ? "#f87171" : isOD ? "#f87171" : "#c8dde8", fontFamily: "'Courier New',monospace" }}>
-                {fc(s.paid ? s.paidAmount : s.payment)}
-              </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: s.paid ? "#4ade80" : isSF ? "#f87171" : isOD ? "#f87171" : "#c8dde8", fontFamily: "'Courier New',monospace" }}>{fc(s.paid ? s.paidAmount : s.payment)}</span>
               {s.restructured && <Badge color="#c084fc" bg="rgba(192,132,252,0.12)">RESTRUCTURED</Badge>}
               {isNext && <Badge color="#60a5fa" bg="rgba(96,165,250,0.12)">NEXT</Badge>}
               {isOD && !isSF && <Badge color="#f87171" bg="rgba(239,68,68,0.1)">OVERDUE</Badge>}
@@ -749,11 +926,11 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
               {hasOver && <Badge color="#a78bfa" bg="rgba(167,139,250,0.12)">OVERPAID</Badge>}
               {hasLog && (
                 <button onClick={() => setShowLog(!showLog)} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", borderRadius: 5, padding: "1px 6px", cursor: "pointer", fontSize: 9, fontWeight: 700 }}>
-                  {s.paymentLog.length} payment{s.paymentLog.length > 1 ? "s" : ""} {showLog ? "▲" : "▼"}
+                  {s.paymentLog.length} pay{s.paymentLog.length > 1 ? "s" : ""} {showLog ? "▲" : "▼"}
                 </button>
               )}
             </div>
-            {isSF && <div style={{ fontSize: 9, color: "#f87171" }}>Paid {fc(s.paidAmount)} · Needs {fc(s.payment - s.paidAmount)}</div>}
+            {isSF && <div style={{ fontSize: 9, color: "#f87171" }}>Paid {fc(s.paidAmount)} · Needs {fc(amountRemaining)}</div>}
             {hasOver && <div style={{ fontSize: 9, color: "#a78bfa" }}>+{fc(s.overpayment)} cascaded</div>}
             <div style={{ fontSize: 9, color: "#3a5a70" }}>Due {fd(s.dueDate)}{s.paidDate && ` · Last paid ${fd(s.paidDate)}`}</div>
           </div>
@@ -772,7 +949,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
         </div>
       </div>
 
-      {/* NEW: Amount Remaining + Quick Collect Input */}
+      {/* NEW: Amount Remaining + Quick Collect */}
       {!s.paid && isActive && (
         <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(100,180,255,0.08)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
@@ -869,10 +1046,7 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
       </div>
       {exp && (
         <div style={{ padding: "14px 16px" }}>
-          {/* PRIORITY 1: Shortfall Banner on active loans */}
           {isAct && <ShortfallBanner loan={loan} />}
-
-          {/* PRIORITY 4: Restructure Log */}
           {(loan.restructureLog || []).length > 0 && (
             <div style={{ background: "rgba(192,132,252,0.06)", border: "1px solid rgba(192,132,252,0.2)", borderRadius: 12, padding: "10px 14px", marginBottom: 14 }}>
               <div style={{ fontSize: 11, color: "#c084fc", fontWeight: 700, marginBottom: 8 }}>🔄 Restructure History</div>
@@ -884,7 +1058,6 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
               ))}
             </div>
           )}
-
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
             {[["Principal", fc(loan.principal), "#93c5fd"], ["Daily", fc(loan.dailyPayment), "#60a5fa"], ["Total", fc(loan.totalRepayable), "#e8f4fd"], ["Collected", fc(fin.collected), "#4ade80"], ["Outstanding", fc(Math.max(0, loan.totalRepayable - fin.collected)), fin.outstandingPrincipal > 0 ? "#f87171" : "#4ade80"], ["Interest", `${loan.interestRate}%`, "#c4b5fd"]].map(([l, v, c]) => (
               <div key={l} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 9, padding: "9px 10px", border: "1px solid rgba(255,255,255,0.04)" }}>
@@ -921,14 +1094,11 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
             </div>
             <div style={{ fontSize: 22, fontWeight: 900, color: pc, fontFamily: "'Courier New',monospace" }}>{fin.completionRate.toFixed(0)}%</div>
           </div>
-
-          {/* PRIORITY 4: Restructure Button */}
           {isAdmin && isAct && (
             <button onClick={() => onRestructure(loan)} style={{ width: "100%", background: "rgba(192,132,252,0.1)", border: "1px solid rgba(192,132,252,0.25)", color: "#c084fc", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 10 }}>
               <Icon name="restructure" size={13} />Restructure Loan
             </button>
           )}
-
           <button onClick={() => setSchOpen(!schOpen)} style={{ width: "100%", background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: schOpen ? 10 : 0 }}>
             <Icon name="calendar" size={13} />{schOpen ? "Hide" : "View"} Schedule
           </button>
@@ -988,8 +1158,7 @@ function LoginScreen({ users, onLogin }) {
       </div>
     </div>
   );
-}
-
+          }
 // ─── STAFF PANEL ─────────────────────────────────────────────────────────────
 function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, onApproveLoan, onRejectLoan, showToast }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -1028,7 +1197,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
   };
 
   const staffReport = useMemo(() => computeStaffMonthlyReport(clients, users, reportMonth), [clients, users, reportMonth]);
-
   const availableMonths = useMemo(() => {
     const months = new Set();
     clients.forEach(c => {
@@ -1153,16 +1321,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
 
       {resetPwd && (
         <Modal title="🔑 Reset Password" onClose={() => { setResetPwd(null); setNewPwd(""); }}>
-          <div style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 10, padding: "12px 14px", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "#f59e0b", fontWeight: 700, marginBottom: 4 }}>Resetting for:</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff", fontSize: 15 }}>{resetPwd.name.charAt(0)}</div>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#e8f4fd" }}>{resetPwd.name}</div>
-                <div style={{ fontSize: 11, color: "#3a5a70" }}>@{resetPwd.username}</div>
-              </div>
-            </div>
-          </div>
           <Field label="New Password *"><input type="password" style={IS} value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="Min 4 characters" autoFocus /></Field>
           <button onClick={handleReset} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Reset</button>
         </Modal>
@@ -1191,15 +1349,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 18, fontWeight: 900, color: rateColor, fontFamily: "'Courier New',monospace" }}>{sr.collectionRate.toFixed(1)}%</div>
                     <div style={{ fontSize: 9, color: "#3a5a70" }}>Rate</div>
-                  </div>
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#3a5a70", marginBottom: 5 }}>
-                    <span>Collected: {fc(sr.collected)}</span>
-                    <span>Expected: {fc(sr.expectedThisMonth)}</span>
-                  </div>
-                  <div style={{ height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${Math.min(sr.collectionRate, 100)}%`, background: `linear-gradient(90deg,${rateColor},${rateColor}99)`, borderRadius: 4 }} />
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
@@ -1237,9 +1386,7 @@ export default function App() {
   const [showAddLoan, setShowAddLoan] = useState(false);
   const [showPayment, setShowPayment] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentPreview, setPaymentPreview] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [showSavingsTx, setShowSavingsTx] = useState(null);
   const [savingsAmount, setSavingsAmount] = useState("");
   const [adminDirectSavingsInput, setAdminDirectSavingsInput] = useState("");
@@ -1253,15 +1400,11 @@ export default function App() {
   const [expandMonthlyHistory, setExpandMonthlyHistory] = useState(false);
   const [expandFinancials, setExpandFinancials] = useState(true);
   const [acctDateFilter, setAcctDateFilter] = useState("today");
-  const [acctSelectedDay, setAcctSelectedDay] = useState(null);
   const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "", occupation: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "", guarantorOccupation: "" });
   const [newLoan, setNewLoan] = useState({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
-  // Priority 4 - Restructure
   const [showRestructure, setShowRestructure] = useState(null);
   const [restructureInput, setRestructureInput] = useState({ newDailyAmount: "", reason: "" });
-  // Priority 3 - Route view visited state
   const [routeVisited, setRouteVisited] = useState({});
-  // Priority 6 - Backup reminder
   const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem("creda_last_backup") || null);
   const [dismissedBackup, setDismissedBackup] = useState(false);
 
@@ -1326,54 +1469,25 @@ export default function App() {
 
   const monthlyReport = useMemo(() => computeMonthlyReport(clients), [clients]);
 
-  const globalTransactions = useMemo(() => {
+  const dailyCollectionData = useMemo(() => {
     const src = isAdmin ? clients : visibleClients;
-    const tx = [];
+    const map = {};
     src.forEach(c => {
       (c.loans || []).forEach(l => {
+        if (l.status === "completed") return; // Hide completed loans
         (l.schedule || []).forEach(s => {
-          if (s.paymentLog && s.paymentLog.length > 0) {
-            s.paymentLog.forEach(pl => {
-              tx.push({ clientId: c.id, clientName: c.name, day: s.day, totalDays: l.days, paidAmount: pl.amount, paidDate: pl.date, dueDate: s.dueDate, cascaded: pl.cascaded || false, by: pl.by || "" });
-            });
-          } else if (s.paidAmount > 0) {
-            tx.push({ clientId: c.id, clientName: c.name, day: s.day, totalDays: l.days, paidAmount: s.paidAmount, paidDate: s.paidDate, dueDate: s.dueDate });
-          }
+          const due = s.dueDate;
+          if (!due) return;
+          if (!map[due]) map[due] = { date: due, expected: 0, collected: 0, installments: [] };
+          if (!s.paid) map[due].expected += s.payment || 0;
+          if (s.paidAmount > 0) map[due].collected += s.paidAmount;
+          map[due].installments.push({ clientName: c.name, clientId: c.id, day: s.day, totalDays: l.days, payment: s.payment, paidAmount: s.paidAmount || 0, paid: s.paid, paidDate: s.paidDate, dueDate: s.dueDate, loanStatus: l.status });
         });
       });
     });
-    return tx.sort((a, b) => new Date(b.paidDate) - new Date(a.paidDate));
+    return Object.values(map).sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [clients, visibleClients, isAdmin]);
 
-  const dailyCollectionData = useMemo(() => {
-  const src = isAdmin ? clients : visibleClients;
-  const map = {};
-  src.forEach(c => {
-    (c.loans || []).forEach(l => {
-      // Skip fully completed loans — they should not appear in daily collections
-      if (l.status === "completed") return;
-      (l.schedule || []).forEach(s => {
-        const due = s.dueDate;
-        if (!due) return;
-        if (!map[due]) map[due] = { date: due, expected: 0, collected: 0, installments: [] };
-        // Only count as expected if not yet paid
-        if (!s.paid) {
-          map[due].expected += s.payment || 0;
-        }
-        if (s.paidAmount > 0) map[due].collected += s.paidAmount;
-        map[due].installments.push({ 
-          clientName: c.name, clientId: c.id, day: s.day, 
-          totalDays: l.days, payment: s.payment, 
-          paidAmount: s.paidAmount || 0, paid: s.paid, 
-          paidDate: s.paidDate, dueDate: s.dueDate,
-          loanStatus: l.status
-        });
-      });
-    });
-  });
-  return Object.values(map).sort((a, b) => new Date(b.date) - new Date(a.date));
-}, [clients, visibleClients, isAdmin]);
-  // PRIORITY 3: Today's route data for officers
   const todayRoute = useMemo(() => {
     const src = visibleClients;
     const route = [];
@@ -1389,7 +1503,6 @@ export default function App() {
     return route;
   }, [visibleClients]);
 
-  // PRIORITY 6: Backup reminder logic
   const showBackupReminder = useMemo(() => {
     if (dismissedBackup) return false;
     if (!lastBackupDate) return true;
@@ -1397,12 +1510,6 @@ export default function App() {
     const isFriday = new Date().getDay() === 5;
     return daysSince >= 7 || isFriday;
   }, [lastBackupDate, dismissedBackup]);
-
-  const computePP = (loan, idx, amt) => {
-    if (!amt || amt <= 0) return null;
-    const sim = applySmartPayment(loan.schedule, idx, amt, todayStr, currentUser?.name);
-    return { daysCleared: sim.filter(s => s.paid).length - loan.schedule.filter(s => s.paid).length, remainingBal: sim[sim.length - 1]?.balance || 0 };
-  };
 
   const getClientSummary = c => {
     const a = c.loans?.find(l => l.status === "active");
@@ -1417,17 +1524,8 @@ export default function App() {
 
   const handleAddClient = () => {
     if (!newClient.name.trim() || !newClient.phone.trim()) return;
-    saveClients([{
-      ...newClient,
-      id: generateId("CL"),
-      loans: [],
-      savingsBalance: 0,
-      savingsLogs: [],
-      assignedTo: currentUser?.id,
-      assignedToName: currentUser?.name,
-      createdAt: todayStr
-    }, ...clients]);
-    setNewClient({ name: "", phone: "", address: "", idNumber: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "" });
+    saveClients([{ ...newClient, id: generateId("CL"), loans: [], savingsBalance: 0, savingsLogs: [], assignedTo: currentUser?.id, assignedToName: currentUser?.name, createdAt: todayStr }, ...clients]);
+    setNewClient({ name: "", phone: "", address: "", idNumber: "", occupation: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "", guarantorOccupation: "" });
     setShowAddClient(false);
     showToast("Registered!");
   };
@@ -1474,25 +1572,40 @@ export default function App() {
   const handleRejectLoan = id => { savePending(pendingLoans.filter(p => p.id !== id)); showToast("Rejected", "error"); };
 
   const handlePayment = (customAmount) => {
-  const amount = customAmount || parseFloat(paymentAmount);
-  if (!amount || !showPayment) return;
-  const { clientId, loanId, scheduleIdx } = showPayment;
-  saveClients(clients.map(c => {
-    if (c.id !== clientId) return c;
-    return {
-      ...c,
-      loans: c.loans.map(l => {
-        if (l.id !== loanId) return l;
-        const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
-        return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
-      })
-    };
-  }));
-  setPaymentAmount(""); setShowPayment(null); setPaymentPreview(null);
-  showToast("Payment recorded!");
-};
+    const amount = customAmount || parseFloat(paymentAmount);
+    if (!amount || !showPayment) return;
+    const { clientId, loanId, scheduleIdx } = showPayment;
+    saveClients(clients.map(c => {
+      if (c.id !== clientId) return c;
+      return {
+        ...c,
+        loans: c.loans.map(l => {
+          if (l.id !== loanId) return l;
+          const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
+          return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
+        })
+      };
+    }));
+    setPaymentAmount(""); setShowPayment(null);
+    showToast("Payment recorded!");
+  };
 
-  // PRIORITY 4: Handle restructure
+  // Direct payment (from InstRow quick collect)
+  const handleDirectPay = (clientId, loanId, scheduleIdx, amount) => {
+    saveClients(clients.map(c => {
+      if (c.id !== clientId) return c;
+      return {
+        ...c,
+        loans: c.loans.map(l => {
+          if (l.id !== loanId) return l;
+          const ns = applySmartPayment(l.schedule, scheduleIdx, amount, todayStr, currentUser?.name);
+          return { ...l, schedule: ns, status: ns.every(s => s.paid) ? "completed" : "active", lastPaymentBy: currentUser?.name };
+        })
+      };
+    }));
+    showToast("Payment recorded!");
+  };
+
   const handleRestructure = () => {
     if (!showRestructure || !restructureInput.newDailyAmount) return;
     const newAmt = parseFloat(restructureInput.newDailyAmount);
@@ -1501,10 +1614,7 @@ export default function App() {
     saveClients(clients.map(c => {
       const hasLoan = c.loans?.find(l => l.id === showRestructure.id);
       if (!hasLoan) return c;
-      return {
-        ...c,
-        loans: c.loans.map(l => l.id === showRestructure.id ? restructureLoan(l, newAmt, restructureInput.reason, currentUser?.name) : l)
-      };
+      return { ...c, loans: c.loans.map(l => l.id === showRestructure.id ? restructureLoan(l, newAmt, restructureInput.reason, currentUser?.name) : l) };
     }));
     setShowRestructure(null);
     setRestructureInput({ newDailyAmount: "", reason: "" });
@@ -1587,14 +1697,13 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "9.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "10.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `creda_backup_${todayStr}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    // PRIORITY 6: Record backup date
     localStorage.setItem("creda_last_backup", todayStr);
     setLastBackupDate(todayStr);
     setDismissedBackup(false);
@@ -1618,873 +1727,659 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <LoginScreen users={users} onLogin={u => { setCurrentUser(u); setProfileEdit({ oldPassword: "", newPassword: "", confirmPassword: "" }); }} />;
+    return <LoginScreen users={users} onLogin={u => { setCurrentUser(u); }} />;
   }
 
-  // ── PRIORITY 6: Backup Reminder Banner ───────────────────────────────────
-  const BackupBanner = () => {
-    if (!showBackupReminder || !isAdmin) return null;
-    const daysSince = lastBackupDate ? Math.floor((new Date() - new Date(lastBackupDate)) / (1000 * 60 * 60 * 24)) : null;
-    return (
-      <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 18 }}>💾</span>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>Backup Reminder</div>
-            <div style={{ fontSize: 10, color: "#7a6030" }}>{daysSince === null ? "No backup recorded" : `Last backup ${daysSince} day${daysSince !== 1 ? "s" : ""} ago`}</div>
+  const currentClient = selectedClient;
+  const activeLoan = currentClient?.loans?.find(l => l.status === "active");
+  const clientFin = currentClient ? computeClientFinancials(currentClient) : null;
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#060f1a", paddingBottom: 80 }}>
+      <Toast msg={toast.msg} type={toast.type} />
+
+      {/* HEADER */}
+      <header style={{ position: "sticky", top: 0, background: "rgba(6,15,26,0.95)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(100,180,255,0.08)", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 50 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,#0a5c36,#0d7a48)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ color: "#fff", fontWeight: 900, fontSize: 15 }}>C</span>
           </div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#e8f4fd", letterSpacing: 1, fontFamily: "serif" }}>CREDA</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => { exportData(); }} style={{ background: "#f59e0b", border: "none", color: "#000", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>Backup Now</button>
-          <button onClick={() => setDismissedBackup(true)} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#5a7a90", padding: "6px 10px", borderRadius: 8, cursor: "pointer", fontSize: 11 }}>×</button>
+          <div style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", color: sync === "synced" ? "#4ade80" : "#f59e0b", fontSize: 16 }}>{sync === "synced" ? "☁" : "⟳"}</div>
+          <button onClick={() => setShowProfile(true)} style={{ background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.2)", color: "#60a5fa", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="user" size={14} /></button>
+          <button onClick={exportData} style={{ background: "rgba(107,122,141,0.1)", border: "1px solid rgba(107,122,141,0.2)", color: "#8ab4c8", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="dashboard" size={14} /></button>
+          <button onClick={() => setCurrentUser(null)} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="logout" size={14} /></button>
         </div>
-      </div>
-    );
-  };
+      </header>
 
-  // ── PRIORITY 3: Today's Route Panel ──────────────────────────────────────
-  const TodayRoute = () => {
-    if (isAdmin) return null;
-    if (todayRoute.length === 0) return null;
-    const totalExpected = todayRoute.reduce((s, r) => s + r.payment, 0);
-    const totalCollected = todayRoute.reduce((s, r) => s + (r.paidAmount || 0), 0);
-    const visitedCount = Object.values(routeVisited).filter(Boolean).length;
-
-    return (
-      <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.08),rgba(34,197,94,0.06))", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 16, padding: 16, marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="route" size={16} />
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa" }}>Today's Route</div>
-              <div style={{ fontSize: 10, color: "#3a5a70" }}>{fd(todayStr)} · {todayRoute.length} client{todayRoute.length !== 1 ? "s" : ""} · {visitedCount} visited</div>
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(totalCollected)}</div>
-            <div style={{ fontSize: 9, color: "#3a5a70" }}>of {fc(totalExpected)}</div>
-          </div>
-        </div>
-
-        <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
-          <div style={{ height: "100%", width: `${totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0}%`, background: "linear-gradient(90deg,#22c55e,#4ade80)", borderRadius: 4 }} />
-        </div>
-
-        {todayRoute.map((r, idx) => {
-          const visited = routeVisited[r.clientId];
-          return (
-            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: visited ? "rgba(34,197,94,0.06)" : "rgba(255,255,255,0.02)", border: `1px solid ${r.risk.level === "red" ? "rgba(239,68,68,0.25)" : r.risk.level === "amber" ? "rgba(245,158,11,0.2)" : "rgba(34,197,94,0.1)"}`, borderRadius: 10, marginBottom: 8 }}>
-              <button onClick={() => setRouteVisited(prev => ({ ...prev, [r.clientId]: !visited }))} style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0, background: visited ? "#22c55e" : "rgba(255,255,255,0.06)", border: visited ? "none" : "1px solid rgba(255,255,255,0.12)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: visited ? "#000" : "#3a5a70" }}>
-                {visited ? <Icon name="check" size={12} /> : "○"}
-              </button>
-              <div style={{ flexGrow: 1, cursor: "pointer" }} onClick={() => { setSelectedClientId(r.clientId); setView("detail"); }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: visited ? "#4ade80" : "#e8f4fd" }}>{r.clientName}</span>
-                  <span style={{ fontSize: 12 }}>{r.risk.emoji}</span>
+      <main style={{ padding: "16px" }}>
+        {/* ── ADMIN ACCOUNTANT MODE ── */}
+        {isAdmin && adminMode === "accountant" && (
+          <div>
+            <div style={{ background: "linear-gradient(135deg, rgba(167,139,250,0.15), rgba(139,92,246,0.08))", borderRadius: 20, padding: "20px 22px", marginBottom: 20, border: "1px solid rgba(167,139,250,0.2)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 4 }}>Financial Ops</div>
+                  <h1 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: "#fff" }}>Accountant</h1>
                 </div>
-                <div style={{ fontSize: 10, color: "#3a5a70" }}>{r.phone}</div>
+                <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>👑 Admin</button>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: r.paid ? "#4ade80" : "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(r.payment)}</div>
-                {r.paidAmount > 0 && !r.paid && <div style={{ fontSize: 9, color: "#f87171" }}>+{fc(r.paidAmount)} partial</div>}
-              </div>
-              {!r.paid && (
-                <button onClick={() => { setSelectedClientId(r.clientId); setView("detail"); setShowPayment({ clientId: r.clientId, loanId: r.loanId, scheduleIdx: r.scheduleIdx }); setPaymentAmount(r.payment.toFixed(2)); }} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "6px 10px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 10, flexShrink: 0 }}>Pay</button>
-              )}
             </div>
-          );
-        })}
-      </div>
-    );
-  };
 
-  const Dashboard = () => (
-    <div>
-      <div style={{ marginBottom: 22, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: "#e8f4fd" }}>{isAdmin ? "Dashboard" : "My Dashboard"}</h1>
-          <p style={{ margin: "4px 0 0", color: "#3a5a70", fontSize: 13 }}>{isAdmin ? `${clients.length} clients` : `${visibleClients.length} clients · ${fm(curMonthKey)}`}</p>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-          <RB role={currentUser.role} />
-          {isAdmin && (
-            <button onClick={() => setAdminMode("accountant")} style={{ background: "rgba(167,139,250,0.15)", border: "1px solid rgba(167,139,250,0.3)", color: "#a78bfa", padding: "6px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>📊 Finance</button>
-          )}
-        </div>
-      </div>
-
-      {/* PRIORITY 6: Backup Banner */}
-      <BackupBanner />
-
-      {!isAdmin && (
-        <div style={{ background: "rgba(96,165,250,0.08)", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#60a5fa", fontWeight: 700 }}>
-          📅 {fm(curMonthKey)} only — Resets next month
-        </div>
-      )}
-
-      {isAdmin && pendingLoans.length > 0 && (
-        <div onClick={() => setView("staff")} style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", borderRadius: 12, padding: "12px 14px", marginBottom: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Icon name="bell" size={16} />
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b" }}>{pendingLoans.length} Pending</div>
-          </div>
-          <Icon name="chevronDown" size={14} />
-        </div>
-      )}
-
-      {/* PRIORITY 3: Today's Route for Officers */}
-      <TodayRoute />
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-        <SC label={isAdmin ? "Disbursed" : "This Month"} value={fc(stats.totalDisbursed)} accent="#3b82f6" />
-        <SC label="Collected" value={fc(stats.totalCollected)} accent="#22c55e" />
-        <SC label="Outstanding" value={fc(stats.outstanding)} accent="#f59e0b" />
-        <SC label="Savings" value={fc(stats.totalSavings)} accent="#a855f7" />
-      </div>
-
-      {isAdmin && <FP fin={globalFin} expandFinancials={expandFinancials} setExpandFinancials={setExpandFinancials} />}
-
-      {isAdmin && (
-        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(100,180,255,0.06)", borderRadius: 14, padding: 16, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#93c5fd", textTransform: "uppercase" }}>Monthly Disbursement Report</h3>
-              <p style={{ margin: "2px 0 0", fontSize: 11, color: "#3a5a70" }}>Loan issuance & collection by month</p>
-            </div>
-            <button onClick={() => setExpandMonthlyHistory(!expandMonthlyHistory)} style={{ background: "rgba(147,197,253,0.1)", border: "none", borderRadius: 8, color: "#93c5fd", padding: "5px 12px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>{expandMonthlyHistory ? "Hide" : "View"}</button>
-          </div>
-          {expandMonthlyHistory && (
-            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-              {monthlyReport.length === 0 ? (
-                <div style={{ fontSize: 11, color: "#3a5a70", textAlign: "center" }}>No data.</div>
-              ) : monthlyReport.map(item => (
-                <div key={item.month} style={{ padding: "12px 14px", background: "rgba(0,0,0,0.2)", borderRadius: 12, borderLeft: "3px solid #22c55e" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <div style={{ fontWeight: 700, color: "#e8f4fd", fontSize: 13 }}>{fm(item.month)}</div>
-                    <div style={{ fontSize: 11, color: "#3a5a70" }}>{item.loanCount} loan{item.loanCount !== 1 ? "s" : ""} · {item.clientCount} client{item.clientCount !== 1 ? "s" : ""}</div>
-                  </div>
-                 {/* DEFAULTING CLIENTS UNDER MONTHLY REPORT */}
-{computeDefaultingClientsReport(clients, curMonthKey).length > 0 && (
-  <div style={{ marginTop: 16, padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12 }}>
-    <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-      ⚠️ Defaulting Clients — {fm(curMonthKey)}
-    </div>
-    {computeDefaultingClientsReport(clients, curMonthKey).map(d => (
-      <div key={d.clientId} onClick={() => { setSelectedClientId(d.clientId); setView("detail"); }} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd" }}>{d.clientName}</div>
-          <div style={{ fontSize: 10, color: "#7a3a3a", marginTop: 2 }}>{d.phone} · {d.daysOverdue} day{d.daysOverdue !== 1 ? "s" : ""} overdue</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(d.totalOwed)}</div>
-          <div style={{ fontSize: 9, color: "#5a3030" }}>owed</div>
-        </div>
-      </div>
-    ))}
-  </div>
-)}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-                    {[["DISBURSED", item.disbursed, "#93c5fd"], ["COLLECTED", item.collected, "#4ade80"], ["INTEREST", item.interest, "#c4b5fd"], ["OUTSTANDING", item.outstanding, "#f87171"]].map(([l, v, c]) => (
-                      <div key={l}>
-                        <div style={{ fontSize: 8, color: "#3a5a70" }}>{l}</div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: c, fontFamily: "'Courier New',monospace" }}>{fc(v)}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#3a5a70", marginBottom: 3 }}>
-                      <span>Collection</span>
-                      <span style={{ color: item.collected >= item.expected ? "#4ade80" : "#f59e0b", fontWeight: 700 }}>{item.expected > 0 ? ((item.collected / item.expected) * 100).toFixed(1) : 0}%</span>
+            {(() => {
+              const todayData = dailyCollectionData.find(d => d.date === todayStr) || { expected: 0, collected: 0, installments: [] };
+              const gap = Math.max(0, todayData.expected - todayData.collected);
+              const rate = todayData.expected > 0 ? (todayData.collected / todayData.expected) * 100 : 0;
+              return (
+                <div style={{ background: "linear-gradient(135deg, rgba(16,30,50,0.85), rgba(10,20,40,0.9))", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 18, padding: 18, marginBottom: 18 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#16a34a,#22c55e)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📅</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#4ade80" }}>Today's Collection</div>
+                      <div style={{ fontSize: 10, color: "#5a7a90" }}>{fd(todayStr)}</div>
                     </div>
-                    <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${item.expected > 0 ? Math.min((item.collected / item.expected) * 100, 100) : 0}%`, background: "linear-gradient(90deg,#22c55e,#4ade80)", borderRadius: 4 }} />
+                  </div>
+                  <div style={{ textAlign: "center", padding: "10px 0 16px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                    <div style={{ fontSize: 32, fontWeight: 900, color: "#4ade80", fontFamily: "'Courier New',monospace", letterSpacing: -1 }}>{fc(todayData.collected)}</div>
+                    <div style={{ fontSize: 11, color: "#5a7a90", marginTop: 6 }}>of {fc(todayData.expected)} expected</div>
+                  </div>
+                  <div style={{ padding: "16px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 10, color: "#5a7a90", fontWeight: 600 }}>Collection Progress</span>
+                      <span style={{ fontSize: 12, color: rate >= 80 ? "#4ade80" : rate >= 50 ? "#f59e0b" : "#f87171", fontWeight: 800, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 6, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: rate >= 80 ? "linear-gradient(90deg,#22c55e,#4ade80)" : rate >= 50 ? "linear-gradient(90deg,#d97706,#f59e0b)" : "linear-gradient(90deg,#dc2626,#f87171)", borderRadius: 6 }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                    <div style={{ padding: 10, background: "rgba(96,165,250,0.06)", borderRadius: 10, border: "1px solid rgba(96,165,250,0.15)", textAlign: "center" }}>
+                      <div style={{ fontSize: 8, color: "#5a7a90" }}>EXPECTED</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(todayData.expected)}</div>
+                    </div>
+                    <div style={{ padding: 10, background: "rgba(74,222,128,0.06)", borderRadius: 10, border: "1px solid rgba(74,222,128,0.15)", textAlign: "center" }}>
+                      <div style={{ fontSize: 8, color: "#5a7a90" }}>COLLECTED</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(todayData.collected)}</div>
+                    </div>
+                    <div style={{ padding: 10, background: gap > 0 ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)", borderRadius: 10, border: `1px solid ${gap > 0 ? "rgba(248,113,113,0.15)" : "rgba(74,222,128,0.15)"}`, textAlign: "center" }}>
+                      <div style={{ fontSize: 8, color: "#5a7a90" }}>GAP</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: gap > 0 ? "#f87171" : "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(gap)}</div>
                     </div>
                   </div>
                 </div>
+              );
+            })()}
+
+            <div style={{ display: "flex", gap: 6, marginBottom: 16, padding: 4, background: "rgba(0,0,0,0.25)", borderRadius: 12 }}>
+              {["today", "week", "month", "all"].map(f => (
+                <button key={f} onClick={() => setAcctDateFilter(f)} style={{ flex: 1, background: acctDateFilter === f ? "linear-gradient(135deg,#16a34a,#22c55e)" : "transparent", border: "none", color: acctDateFilter === f ? "#000" : "#5a7a90", padding: "9px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, textTransform: "capitalize" }}>{f}</button>
               ))}
             </div>
-          )}
-        </div>
-      )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#c8dde8" }}>Recent</div>
-        <button onClick={() => setView("clients")} style={{ background: "none", border: "none", color: "#3b82f6", fontSize: 12, cursor: "pointer" }}>All →</button>
-      </div>
-      {visibleClients.slice(0, 5).map(c => {
-        const { active, overdue, balance } = getClientSummary(c);
-        const risk = computeClientRisk(c);
-        return (
-          <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); }} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(100,180,255,0.07)", borderRadius: 12, padding: "12px 15px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 15, color: "#fff", flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
-              <div>
-                <div style={{ fontWeight: 600, color: "#dceef8", fontSize: 14 }}>{c.name}</div>
-                <div style={{ fontSize: 10, color: "#3a5a70" }}>{c.phone}</div>
-              </div>
-            </div>
-            <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 14 }}>{risk.emoji}</span>
-              {active ? <div style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div> : <div style={{ fontSize: 11, color: "#2a4050" }}>No loan</div>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  const ClientsList = () => (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>{isAdmin ? "Clients" : "My Clients"}</h1>
-        <button onClick={() => setShowAddClient(true)} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "9px 16px", borderRadius: 11, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-          <Icon name="plus" size={13} />New
-        </button>
-      </div>
-      <div style={{ position: "relative", marginBottom: 10 }}>
-        <span style={{ position: "absolute", left: 12, top: 11, color: "#5a7a90" }}><Icon name="search" size={14} /></span>
-        <input style={{ ...IS, paddingLeft: 36 }} placeholder="Search…" value={clientSearch} onChange={e => setClientSearch(e.target.value)} />
-      </div>
-
-      {/* PRIORITY 2: Filter includes risk filters */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, overflowX: "auto" }}>
-        {[{ id: "all", l: "All" }, { id: "active", l: "Active" }, { id: "completed", l: "Done" }, { id: "none", l: "No Loan" }, { id: "red", l: "🔴 High Risk" }, { id: "amber", l: "🟡 Watch" }].map(f => (
-          <button key={f.id} onClick={() => setClientFilter(f.id)} style={{ background: clientFilter === f.id ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.03)", border: clientFilter === f.id ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(255,255,255,0.06)", color: clientFilter === f.id ? "#4ade80" : "#8ab4c8", padding: "6px 12px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>{f.l}</button>
-        ))}
-      </div>
-
-      {filteredClients.map(c => {
-        const { active, overdue, paid, total } = getClientSummary(c);
-        const risk = computeClientRisk(c);
-        return (
-          <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); setActiveTab("loans"); }} style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${risk.level === "red" ? "rgba(239,68,68,0.3)" : risk.level === "amber" ? "rgba(245,158,11,0.25)" : "rgba(100,180,255,0.07)"}`, borderRadius: 13, padding: "14px 16px", cursor: "pointer", marginBottom: 9 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: active ? 10 : 0 }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <div style={{ width: 40, height: 40, borderRadius: 11, background: "linear-gradient(135deg,#1e3a5f,#2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#93c5fd", flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
-                <div>
-                  <div style={{ fontWeight: 700, color: "#dceef8", fontSize: 14 }}>{c.name}</div>
-                  <div style={{ fontSize: 10, color: "#3a5a70" }}>{c.phone}{isAdmin && c.assignedToName && <span style={{ color: "#60a5fa" }}> · {c.assignedToName}</span>}</div>
-                  {/* PRIORITY 2: Risk tag visible on list */}
-                  {active && (
-                    <div style={{ marginTop: 3 }}>
-                      <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 10, background: risk.bg, color: risk.color, fontWeight: 700 }}>{risk.emoji} {risk.label}</span>
+            {dailyCollectionData.filter(d => {
+              if (acctDateFilter === "today") return d.date === todayStr;
+              if (acctDateFilter === "week") { const diff = (new Date() - new Date(d.date)) / (86400000); return diff >= 0 && diff <= 7; }
+              if (acctDateFilter === "month") return d.date.slice(0, 7) === curMonthKey;
+              return true;
+            }).map(day => {
+              const dayRate = day.expected > 0 ? (day.collected / day.expected) * 100 : 0;
+              const isToday = day.date === todayStr;
+              const pending = day.installments.filter(i => !i.paid);
+              const paid = day.installments.filter(i => i.paid);
+              return (
+                <div key={day.date} style={{ background: "linear-gradient(135deg, rgba(16,30,50,0.7), rgba(10,20,40,0.5))", border: `1px solid ${isToday ? "rgba(74,222,128,0.25)" : "rgba(100,180,255,0.08)"}`, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: "#e8f4fd" }}>{fd(day.date)}</span>
+                        {isToday && <span style={{ fontSize: 9, padding: "2px 8px", background: "linear-gradient(135deg,#16a34a,#22c55e)", color: "#000", borderRadius: 20, fontWeight: 800 }}>TODAY</span>}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 3 }}>{new Date(day.date).toLocaleDateString("en-NG", { weekday: "long" })}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(day.collected)}</div>
+                      <div style={{ fontSize: 10, color: "#5a7a90", fontFamily: "'Courier New',monospace" }}>/ {fc(day.expected)}</div>
+                    </div>
+                  </div>
+                  <div style={{ height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden", marginBottom: 14 }}>
+                    <div style={{ height: "100%", width: `${Math.min(dayRate, 100)}%`, background: dayRate >= 80 ? "linear-gradient(90deg,#22c55e,#4ade80)" : dayRate >= 50 ? "linear-gradient(90deg,#d97706,#f59e0b)" : "linear-gradient(90deg,#dc2626,#f87171)", borderRadius: 4 }} />
+                  </div>
+                  {pending.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 8, textTransform: "uppercase" }}>Pending</div>
+                      {pending.map((i, idx) => (
+                        <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 9, marginBottom: 5 }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "#e8f4fd" }}>{i.clientName}</div>
+                            <div style={{ fontSize: 9, color: "#5a7a90" }}>Day {i.day}/{i.totalDays}</div>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(i.payment - (i.paidAmount || 0))}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {paid.length > 0 && (
+                    <div style={{ marginTop: pending.length ? 12 : 0 }}>
+                      <div style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, marginBottom: 8, textTransform: "uppercase" }}>✓ Collected ({paid.length})</div>
+                      {paid.map((i, idx) => (
+                        <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: "rgba(74,222,128,0.04)", borderRadius: 8, marginBottom: 4, opacity: 0.7 }}>
+                          <div style={{ fontSize: 11, color: "#8ab4c8" }}><span style={{ color: "#4ade80" }}>✓</span> {i.clientName} · Day {i.day}/{i.totalDays}</div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(i.paidAmount)}</div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
-              </div>
-              <Badge color={active ? "#4ade80" : "#3a5a70"} bg={active ? "rgba(34,197,94,0.12)" : "rgba(100,130,150,0.08)"}>{active ? "Active" : c.loans?.length ? "Done" : "No Loan"}</Badge>
-            </div>
-            {active && (
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#3a5a70", marginBottom: 5 }}>
-                  <span>{paid}/{total}</span>
-                  <span style={{ color: overdue > 0 ? "#f87171" : "#3a6050" }}>{overdue > 0 ? `${overdue} overdue` : "✓"}</span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── DASHBOARD ── */}
+        {(!isAdmin || adminMode === "admin") && view === "dashboard" && (
+          <div>
+            <div style={{ background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(34,197,94,0.08), rgba(167,139,250,0.1))", borderRadius: 20, padding: "20px 22px", marginBottom: 20, border: "1px solid rgba(100,180,255,0.15)", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: -40, right: -40, width: 140, height: 140, background: "radial-gradient(circle, rgba(59,130,246,0.2), transparent)", borderRadius: "50%" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", position: "relative" }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "#60a5fa", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>{new Date().toLocaleDateString("en-NG", { weekday: "long" })} · {fd(todayStr)}</div>
+                  <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900, color: "#fff", letterSpacing: -0.5, lineHeight: 1.1 }}>{(() => { const h = new Date().getHours(); return h < 12 ? "Good Morning" : h < 17 ? "Good Afternoon" : "Good Evening"; })()}</h1>
+                  <div style={{ fontSize: 13, color: "#8ab4c8", marginTop: 4, fontWeight: 500 }}>{currentUser.name.split(" ")[0]} · {isAdmin ? "Portfolio" : "Your Portfolio"}</div>
                 </div>
-                <div style={{ height: 3, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${(paid / total) * 100}%`, background: "linear-gradient(90deg,#22c55e,#4ade80)", borderRadius: 4 }} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                  <RB role={currentUser.role} />
+                  {isAdmin && (
+                    <button onClick={() => setAdminMode("accountant")} style={{ background: "linear-gradient(135deg, rgba(167,139,250,0.2), rgba(139,92,246,0.15))", border: "1px solid rgba(167,139,250,0.3)", color: "#c4b5fd", padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>📊 Finance</button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {showBackupReminder && isAdmin && (
+              <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 18 }}>💾</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>Backup Reminder</div>
+                    <div style={{ fontSize: 10, color: "#7a6030" }}>{lastBackupDate ? `Last: ${Math.floor((new Date() - new Date(lastBackupDate)) / 86400000)}d ago` : "No backup yet"}</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={exportData} style={{ background: "#f59e0b", border: "none", color: "#000", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>Backup</button>
+                  <button onClick={() => setDismissedBackup(true)} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#5a7a90", padding: "6px 10px", borderRadius: 8, cursor: "pointer" }}>×</button>
                 </div>
               </div>
             )}
-          </div>
-        );
-      })}
-    </div>
-  );
 
-  const Ledger = () => (
-    <div>
-      <div style={{ marginBottom: 22 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>Ledger</h1>
-        <p style={{ margin: "4px 0 0", color: "#3a5a70", fontSize: 13 }}>Individual payments with dates</p>
-      </div>
-      {globalTransactions.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 60, color: "#2a4050" }}>No transactions.</div>
-      ) : globalTransactions.map((tx, idx) => (
-        <div key={idx} style={{ background: tx.cascaded ? "rgba(167,139,250,0.04)" : "rgba(255,255,255,0.02)", border: `1px solid ${tx.cascaded ? "rgba(167,139,250,0.15)" : "rgba(100,180,255,0.05)"}`, borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div>
-            <div style={{ fontWeight: 700, color: "#e8f4fd", fontSize: 13 }}>{tx.clientName}</div>
-            <div style={{ fontSize: 10, color: "#3a5a70", marginTop: 2 }}>Day {tx.day}/{tx.totalDays} · Paid {fd(tx.paidDate)}{tx.by ? ` · ${tx.by}` : ""}</div>
-            {tx.cascaded && <div style={{ fontSize: 9, color: "#a78bfa", marginTop: 1 }}>⚡ Cascaded from overpayment</div>}
-          </div>
-          <div style={{ fontSize: 13, color: tx.cascaded ? "#a78bfa" : "#4ade80", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>+{fc(tx.paidAmount)}</div>
-        </div>
-      ))}
-    </div>
-  );
-
-  const AccountantView = () => {
-    const todayData = dailyCollectionData.find(d => d.date === todayStr);
-    const filteredDays = useMemo(() => {
-      if (acctDateFilter === "today") return dailyCollectionData.filter(d => d.date === todayStr);
-      if (acctDateFilter === "week") { const w = new Date(today); w.setDate(w.getDate() - 7); return dailyCollectionData.filter(d => new Date(d.date) >= w); }
-      if (acctDateFilter === "month") { const m = new Date(today); m.setDate(m.getDate() - 30); return dailyCollectionData.filter(d => new Date(d.date) >= m); }
-      return dailyCollectionData;
-    }, [acctDateFilter]);
-
-    return (
-      <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div><h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>Accountant</h1></div>
-          {isAdmin && <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(200,146,10,0.15)", border: "1px solid rgba(200,146,10,0.3)", color: "#f59e0b", padding: "8px 14px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>🔐 Admin</button>}
-        </div>
-        <div style={{ background: "linear-gradient(135deg,rgba(34,197,94,0.08),rgba(59,130,246,0.06))", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 16, padding: "16px", marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, marginBottom: 12 }}>📅 Today — {fd(todayStr)}</div>
-          {todayData ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              {[["Expected", todayData.expected, "#60a5fa"], ["Collected", todayData.collected, "#4ade80"], ["Gap", Math.max(0, todayData.expected - todayData.collected), "#f87171"]].map(([l, v, c]) => (
-                <div key={l} style={{ background: "rgba(0,0,0,0.25)", borderRadius: 10, padding: "10px" }}>
-                  <div style={{ fontSize: 9, color: "#3a5a70" }}>{l}</div>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: c, fontFamily: "'Courier New',monospace" }}>{fc(v)}</div>
-                </div>
-              ))}
-            </div>
-          ) : <div style={{ color: "#3a5a70", textAlign: "center" }}>No collections today.</div>}
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-          {[{ id: "today", l: "Today" }, { id: "week", l: "Week" }, { id: "month", l: "Month" }, { id: "all", l: "All" }].map(f => (
-            <button key={f.id} onClick={() => setAcctDateFilter(f.id)} style={{ background: acctDateFilter === f.id ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.03)", border: acctDateFilter === f.id ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(255,255,255,0.06)", color: acctDateFilter === f.id ? "#4ade80" : "#8ab4c8", padding: "6px 14px", borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{f.l}</button>
-          ))}
-        </div>
-        {filteredDays.map(day => {
-          const rate = day.expected > 0 ? (day.collected / day.expected) * 100 : 0;
-          const isOpen = acctSelectedDay === day.date;
-          return (
-            <div key={day.date} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(100,180,255,0.08)", borderRadius: 14, marginBottom: 10, overflow: "hidden" }}>
-              <div onClick={() => setAcctSelectedDay(isOpen ? null : day.date)} style={{ padding: "13px 15px", cursor: "pointer" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>
-                    {fd(day.date)} {day.date === todayStr && <Badge color="#4ade80" bg="rgba(34,197,94,0.15)">TODAY</Badge>}
+            {isAdmin && pendingLoans.length > 0 && (
+              <div onClick={() => setView("staff")} style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.12), rgba(234,88,12,0.08))", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(245,158,11,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="bell" size={16} /></div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b" }}>{pendingLoans.length} Pending Approval{pendingLoans.length > 1 ? "s" : ""}</div>
+                    <div style={{ fontSize: 10, color: "#7a6030", marginTop: 2 }}>Tap to review</div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>
-                    {fc(day.collected)}<span style={{ color: "#3a5a70", fontWeight: 400 }}> / {fc(day.expected)}</span>
-                  </div>
-                </div>
-                <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: "linear-gradient(90deg,#22c55e,#4ade80)", borderRadius: 4 }} />
                 </div>
               </div>
-              {isOpen && (
-                <div style={{ padding: "10px 15px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                  {day.installments.map((inst, idx) => (
-                    <div key={idx} onClick={() => { setSelectedClientId(inst.clientId); setView("detail"); setAcctSelectedDay(null); }} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.03)", cursor: "pointer" }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "#dceef8" }}>{inst.clientName}</div>
-                        <div style={{ fontSize: 9, color: "#3a5a70" }}>Day {inst.day}/{inst.totalDays}</div>
-                      </div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: inst.paid ? "#4ade80" : "#8ab4c8", fontFamily: "'Courier New',monospace" }}>{fc(inst.paid ? inst.paidAmount : inst.payment)}</div>
+            )}
+
+            {!isAdmin && todayRoute.length > 0 && (
+              <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.08),rgba(34,197,94,0.06))", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 16, padding: 16, marginBottom: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Icon name="route" size={16} />
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa" }}>Today's Route</div>
+                      <div style={{ fontSize: 10, color: "#3a5a70" }}>{todayRoute.length} client{todayRoute.length !== 1 ? "s" : ""}</div>
                     </div>
-                  ))}
+                  </div>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  const Detail = () => {
-    if (!selectedClient) return null;
-    const c = selectedClient;
-    const activeLoan = c.loans?.find(l => l.status === "active");
-    const allLoans = [...(c.loans || [])].reverse();
-    const clientFin = useMemo(() => computeClientFinancials(c), [c.id]);
-    const myPending = pendingLoans.filter(p => p.clientId === c.id);
-    const clientTx = useMemo(() => getClientTransactions(c), [c]);
-    const risk = computeClientRisk(c);
-
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <button onClick={() => setView("clients")} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="back" size={15} />
-          </button>
-          <div style={{ width: 44, height: 44, borderRadius: 12, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
-          <div style={{ flexGrow: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "#e8f4fd" }}>{c.name}</div>
-              {/* PRIORITY 2: Risk badge on detail header */}
-              {activeLoan && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, background: risk.bg, color: risk.color, fontWeight: 700 }}>{risk.emoji} {risk.label}</span>}
-            </div>
-            <div style={{ fontSize: 11, color: "#3a5a70" }}>{c.id}</div>
-          </div>
-          <button onClick={() => setShowEditClient(c)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#3b82f6", width: 32, height: 32, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="edit" size={14} />
-          </button>
-        </div>
-
-        {/* PRIORITY 5: Client profile with guarantor info */}
-        <div style={{ background: "rgba(100,180,255,0.04)", border: "1px solid rgba(100,180,255,0.08)", borderRadius: 13, padding: "14px 16px", marginBottom: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-            {[["PHONE", c.phone || "—"], ["ID/BVN", c.idNumber || "—"], ["SAVINGS", <span key="s" style={{ color: "#c084fc", fontWeight: 700 }}>{fc(c.savingsBalance || 0)}</span>], ["OFFICER", c.assignedToName || "—"]].map(([l, v]) => (
-              <div key={l}>
-                <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>{l}</div>
-                <div style={{ color: "#c8dde8", fontSize: 13 }}>{v}</div>
-              </div>
-            ))}
-            <div style={{ gridColumn: "1/-1" }}>
-              <div style={{ fontSize: 10, color: "#3a5a70", marginBottom: 3 }}>ADDRESS</div>
-              <div style={{ color: "#c8dde8", fontSize: 13 }}>{c.address || "—"}</div>
-            </div>
-          </div>
-          {/* Guarantor section */}
-          {(c.guarantorName || c.guarantorPhone) && (
-            <div style={{ borderTop: "1px solid rgba(100,180,255,0.08)", paddingTop: 10, marginTop: 4 }}>
-              <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 6 }}>🛡️ GUARANTOR</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {[["NAME", c.guarantorName || "—"], ["PHONE", c.guarantorPhone || "—"], ["RELATIONSHIP", c.guarantorRelationship || "—"]].map(([l, v]) => (
-                  <div key={l} style={{ gridColumn: l === "RELATIONSHIP" ? "1/-1" : "auto" }}>
-                    <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 2 }}>{l}</div>
-                    <div style={{ color: "#c8dde8", fontSize: 12 }}>{v}</div>
+                {todayRoute.map((r, idx) => (
+                  <div key={idx} onClick={() => { setSelectedClientId(r.clientId); setView("detail"); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "rgba(255,255,255,0.02)", border: `1px solid ${r.risk.level === "red" ? "rgba(239,68,68,0.25)" : "rgba(100,180,255,0.08)"}`, borderRadius: 10, marginBottom: 8, cursor: "pointer" }}>
+                    <div style={{ flexGrow: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>{r.clientName}</span>
+                        <span>{r.risk.emoji}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#3a5a70" }}>{r.phone}</div>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(r.payment)}</div>
                   </div>
                 ))}
               </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
+              <ModernStatCard label={isAdmin ? "Disbursed" : "This Month"} value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
+              <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
+              <ModernStatCard label="Outstanding" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > stats.totalDisbursed * 0.5} />
+              <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
             </div>
-          )}
-        </div>
 
-        {isAdmin && (
-          <button onClick={() => setShowAssignClient(c)} style={{ width: "100%", marginBottom: 12, background: "rgba(96,165,250,0.06)", border: "1px solid rgba(96,165,250,0.15)", color: "#60a5fa", padding: "8px", borderRadius: 9, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            <Icon name="users" size={13} />Reassign
-          </button>
-        )}
+            {isAdmin && <ModernPortfolioCard fin={globalFin} expanded={expandFinancials} onToggle={() => setExpandFinancials(!expandFinancials)} />}
 
-        {isAdmin && <FP fin={clientFin} isClient={true} />}
+            {isAdmin && <DefaultersSection clients={clients} monthKey={null} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {isAdmin && !activeLoan && (
-            <button onClick={() => setShowAddLoan(true)} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              <Icon name="plus" size={13} />Issue
-            </button>
-          )}
-          {!isAdmin && !activeLoan && myPending.length === 0 && (
-            <button onClick={() => setShowAddLoan(true)} style={{ flex: 1, background: "rgba(96,165,250,0.12)", border: "1px solid rgba(96,165,250,0.25)", color: "#60a5fa", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              <Icon name="plus" size={13} />Request
-            </button>
-          )}
-          <button onClick={() => setShowSavingsTx({ type: "deposit", client: c })} style={{ flex: 1, background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.25)", color: "#c084fc", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 13 }}>📥 Savings</button>
-        </div>
-
-        <div style={{ display: "flex", gap: 3, marginBottom: 16, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: 3 }}>
-          {[{ id: "loans", label: `Cycles (${allLoans.length})` }, { id: "history", label: "📋 History" }, { id: "savings", label: "Savings" }].map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: 1, padding: "8px 4px", borderRadius: 8, border: "none", cursor: "pointer", background: activeTab === tab.id ? "rgba(100,180,255,0.1)" : "transparent", color: activeTab === tab.id ? (tab.id === "savings" ? "#c084fc" : tab.id === "history" ? "#f59e0b" : "#93c5fd") : "#3a5a70", fontWeight: 600, fontSize: 11 }}>{tab.label}</button>
-          ))}
-        </div>
-
-        {activeTab === "loans" && (allLoans.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 40, color: "#2a4050" }}>No cycles.</div>
-        ) : (
-          <div>
-            {allLoans.map((loan, idx) => (
-              <LCC key={loan.id} loan={loan} num={allLoans.length - idx} total={allLoans.length} isAdmin={isAdmin} today={today}
-                onPay={(loan, i, customAmt) => { setShowPayment({ clientId: c.id, loanId: loan.id, scheduleIdx: si }); setPaymentAmount(loan.dailyPayment.toFixed(2)); setPaymentPreview(null); }}
-                onOverride={(loan, idx2, s) => { setAdminEditInstallment({ client: c, loan, idx: idx2 }); setAdminInstOverride({ paid: s.paid, paidAmount: s.paidAmount || loan.dailyPayment.toFixed(2), dueDate: s.dueDate, paidDate: s.paidDate || todayStr }); }}
-                onRestructure={(loan) => { setShowRestructure(loan); setRestructureInput({ newDailyAmount: loan.dailyPayment.toFixed(2), reason: "" }); }}
-              />
-            ))}
-          </div>
-        ))}
-
-        {activeTab === "history" && (
-          <div>
-            <div style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)", borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Icon name="history" size={15} />
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b" }}>Transaction History</span>
-              </div>
-              <div style={{ fontSize: 11, color: "#3a5a70", marginTop: 4 }}>{clientTx.length} transactions · Each payment shown separately</div>
-            </div>
-            {clientTx.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "#2a4050" }}>No transactions.</div>
-            ) : clientTx.map(tx => (
-              <div key={tx.id} style={{ background: tx.type === "loan_issued" ? "rgba(96,165,250,0.04)" : tx.type === "loan_payment" ? "rgba(34,197,94,0.03)" : "rgba(168,85,247,0.04)", border: `1px solid ${tx.color}25`, borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, background: "rgba(255,255,255,0.04)" }}>{tx.icon}</div>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>{tx.description}</div>
-                    <div style={{ fontSize: 10, color: "#3a5a70", marginTop: 3 }}>{tx.detail}</div>
-                    <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 3 }}>{fd(tx.date)}</div>
+            {isAdmin && (
+              <div style={{ background: "linear-gradient(135deg,rgba(16,30,50,0.7),rgba(10,20,40,0.5))", border: "1px solid rgba(100,180,255,0.1)", borderRadius: 18, padding: 18, marginBottom: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 9, background: "rgba(147,197,253,0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="chart" size={15} /></div>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#e8f4fd" }}>Monthly Performance</h3>
+                      <p style={{ margin: "2px 0 0", fontSize: 10, color: "#5a7a90" }}>Loan trends</p>
+                    </div>
                   </div>
+                  <button onClick={() => setExpandMonthlyHistory(!expandMonthlyHistory)} style={{ background: "rgba(147,197,253,0.12)", border: "none", borderRadius: 9, color: "#93c5fd", padding: "7px 14px", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>{expandMonthlyHistory ? "Hide" : "View"} {expandMonthlyHistory ? "▲" : "▼"}</button>
                 </div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: tx.color, fontFamily: "'Courier New',monospace" }}>
-                    {tx.type === "loan_issued" || tx.type === "withdraw" ? "−" : "+"}{fc(tx.amount)}
+                {expandMonthlyHistory && (
+                  <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                    {monthlyReport.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#3a5a70", textAlign: "center", padding: 20 }}>📊 No data</div>
+                    ) : monthlyReport.map(item => {
+                      const rate = item.expected > 0 ? (item.collected / item.expected) * 100 : 0;
+                      const rc = rate >= 80 ? "#22c55e" : rate >= 50 ? "#f59e0b" : "#ef4444";
+                      return (
+                        <div key={item.month} style={{ padding: "14px 16px", background: "rgba(0,0,0,0.25)", borderRadius: 14, borderLeft: `3px solid ${rc}` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                            <div>
+                              <div style={{ fontWeight: 800, color: "#e8f4fd", fontSize: 14 }}>{fm(item.month)}</div>
+                              <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 2 }}>{item.loanCount} loan{item.loanCount !== 1 ? "s" : ""} · {item.clientCount} client{item.clientCount !== 1 ? "s" : ""}</div>
+                            </div>
+                            <div style={{ background: `${rc}20`, border: `1px solid ${rc}40`, borderRadius: 8, padding: "4px 10px" }}>
+                              <span style={{ fontSize: 13, fontWeight: 800, color: rc, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}%</span>
+                            </div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            {[["DISBURSED", item.disbursed, "#93c5fd"], ["COLLECTED", item.collected, "#4ade80"], ["INTEREST", item.interest, "#c4b5fd"], ["OUTSTANDING", item.outstanding, "#f87171"]].map(([l, v, c]) => (
+                              <div key={l} style={{ padding: "8px 10px", background: `${c}10`, borderRadius: 8, border: `1px solid ${c}20` }}>
+                                <div style={{ fontSize: 8, color: "#5a7a90", letterSpacing: 0.8 }}>{l}</div>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: c, fontFamily: "'Courier New',monospace" }}>{fc(v)}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ marginTop: 10, height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: `linear-gradient(90deg,${rc},${rc}cc)`, borderRadius: 4 }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* DEFAULTERS UNDER MONTHLY REPORT */}
+                    {computeDefaultingClientsReport(clients, curMonthKey).length > 0 && (
+                      <div style={{ marginTop: 6, padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginBottom: 10 }}>⚠️ Defaulting Clients — {fm(curMonthKey)}</div>
+                        {computeDefaultingClientsReport(clients, curMonthKey).map(d => (
+                          <div key={d.clientId} onClick={() => { setSelectedClientId(d.clientId); setView("detail"); }} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 10, padding: "10px 12px", marginBottom: 8, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd" }}>{d.clientName}</div>
+                              <div style={{ fontSize: 10, color: "#7a3a3a", marginTop: 2 }}>{d.phone} · {d.daysOverdue} day{d.daysOverdue !== 1 ? "s" : ""} overdue</div>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontSize: 13, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(d.totalOwed)}</div>
+                              <div style={{ fontSize: 9, color: "#5a3030" }}>owed</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab === "savings" && (
-          <div>
-            <div style={{ background: "rgba(168,85,247,0.05)", border: "1px solid rgba(168,85,247,0.15)", borderRadius: 14, padding: 16, marginBottom: 16 }}>
-              <div style={{ textAlign: "center", marginBottom: 14 }}>
-                <div style={{ fontSize: 10, color: "#a855f7", fontWeight: 700 }}>BALANCE</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#c084fc", fontFamily: "'Courier New',monospace", marginTop: 6 }}>{fc(c.savingsBalance || 0)}</div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <button onClick={() => setShowSavingsTx({ type: "deposit", client: c })} style={{ background: "#a855f7", border: "none", color: "#fff", fontWeight: 700, padding: "10px", borderRadius: 10, cursor: "pointer" }}>📥 Deposit</button>
-                <button onClick={() => setShowSavingsTx({ type: "withdraw", client: c })} style={{ background: "transparent", border: "1px solid #a855f7", color: "#c084fc", fontWeight: 700, padding: "10px", borderRadius: 10, cursor: "pointer" }}>📤 Withdraw</button>
-              </div>
-            </div>
-            {(!c.savingsLogs || c.savingsLogs.length === 0) ? (
-              <div style={{ textAlign: "center", padding: 20, color: "#2a4050", fontSize: 12 }}>No history.</div>
-            ) : c.savingsLogs.map((log, idx) => (
-              <div key={idx} style={{ background: "rgba(255,255,255,0.01)", border: "1px solid rgba(168,85,247,0.08)", borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: log.type === "deposit" ? "#4ade80" : log.type === "withdraw" ? "#f87171" : "#c084fc" }}>{log.type === "deposit" ? "Deposit" : log.type === "withdraw" ? "Withdrawal" : "Override"}</div>
-                  <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>{fd(log.date)}{log.recordedBy && ` · ${log.recordedBy}`}</div>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{log.type === "deposit" ? "+" : "-"}{fc(log.amount)}</div>
-                  <div style={{ fontSize: 9, color: "#3a5a70" }}>Bal: {fc(log.balanceAfter)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {isAdmin && (
-          <button onClick={() => setConfirmDelete(c.id)} style={{ marginTop: 22, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#f87171", padding: "9px 18px", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 7 }}>
-            <Icon name="trash" size={13} />Delete
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const navItems = [
-    { id: "dashboard", label: "Overview", icon: "dashboard" },
-    { id: "clients", label: isAdmin ? "Clients" : "Mine", icon: "user" },
-    { id: "ledger", label: "Ledger", icon: "ledger" },
-    ...(isAdmin ? [{ id: "accountant", label: "Accounts", icon: "account" }, { id: "staff", label: "Staff", icon: "users" }] : [])
-  ];
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#060f1a", fontFamily: "'Segoe UI',system-ui,sans-serif", color: "#e8f4fd" }}>
-      <Toast msg={toast.msg} type={toast.type} />
-      {!isAdmin && (
-        <div style={{ background: "rgba(96,165,250,0.12)", borderBottom: "1px solid rgba(96,165,250,0.15)", padding: "5px 16px", fontSize: 11, color: "#60a5fa", display: "flex", justifyContent: "space-between" }}>
-          <span>🏦 Officer</span>
-          <span style={{ color: "#3a5a70" }}>{currentUser.name}</span>
-        </div>
-      )}
-      <div style={{ background: "rgba(6,15,26,0.95)", borderBottom: "1px solid rgba(100,180,255,0.07)", padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: !isAdmin ? 28 : 0, zIndex: 100, backdropFilter: "blur(10px)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#0a5c36,#0d7a48)", border: "1.5px solid rgba(200,146,10,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="20" height="20" viewBox="0 0 80 80" fill="none">
-              <path d="M48 22A19 19 0 1 0 48 58" stroke="white" strokeWidth="5.5" strokeLinecap="round" fill="none" />
-              <path d="M42 30L53 20L64 30" stroke="#c8920a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              <line x1="53" y1="20" x2="53" y2="44" stroke="#c8920a" strokeWidth="4" strokeLinecap="round" />
-            </svg>
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "#e8f4fd", letterSpacing: 1, fontFamily: "serif" }}>CREDA</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 10, color: sync === "synced" ? "#22c55e" : "#60a5fa", fontWeight: 600 }}>{sync === "synced" ? "☁️" : "⟳"}</span>
-          {isAdmin && pendingLoans.length > 0 && (
-            <button onClick={() => setView("staff")} style={{ position: "relative", background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Icon name="bell" size={14} />
-              <span style={{ position: "absolute", top: -4, right: -4, background: "#ef4444", color: "#fff", fontSize: 9, fontWeight: 800, width: 14, height: 14, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>{pendingLoans.length}</span>
-            </button>
-          )}
-          <button onClick={() => { setShowProfile(true); setProfileEdit({ oldPassword: "", newPassword: "", confirmPassword: "" }); }} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#8ab4c8", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="key" size={14} />
-          </button>
-          <button onClick={() => setShowSettings(true)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "#8ab4c8", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>⚙️</button>
-          <button onClick={() => setCurrentUser(null)} style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#f87171", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="logout" size={14} />
-          </button>
-        </div>
-      </div>
-
-      <div style={{ padding: "20px 16px 100px", maxWidth: 540, margin: "0 auto" }}>
-        {view === "dashboard" && (isAdmin && adminMode === "accountant" ? <AccountantView /> : <Dashboard />)}
-        {view === "clients" && <ClientsList />}
-        {view === "ledger" && <Ledger />}
-        {view === "accountant" && isAdmin && <AccountantView />}
-        {view === "staff" && isAdmin && <StaffPanel users={users} clients={clients} pendingLoans={pendingLoans} currentUser={currentUser} onUpdateUsers={saveUsers} onApproveLoan={handleApproveLoan} onRejectLoan={handleRejectLoan} showToast={showToast} />}
-        {view === "detail" && <Detail />}
-      </div>
-
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(6,15,26,0.97)", borderTop: "1px solid rgba(100,180,255,0.07)", display: "flex", backdropFilter: "blur(12px)", zIndex: 900 }}>
-        {navItems.map(n => {
-          const active = view === n.id || (view === "detail" && n.id === "clients");
-          return (
-            <button key={n.id} onClick={() => { setView(n.id); if (n.id === "dashboard") setAdminMode("admin"); }} style={{ flex: 1, padding: "12px 8px 14px", background: "transparent", border: "none", cursor: "pointer", color: active ? "#22c55e" : "#4a6880", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, position: "relative" }}>
-              <Icon name={n.icon} size={18} />
-              <span style={{ fontSize: 10, fontWeight: 600 }}>{n.label}</span>
-              {n.id === "staff" && pendingLoans.length > 0 && (
-                <span style={{ position: "absolute", top: 8, right: "calc(50% - 14px)", background: "#ef4444", color: "#fff", fontSize: 8, fontWeight: 800, width: 13, height: 13, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>{pendingLoans.length}</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── MODALS ── */}
-
-      {showProfile && (
-        <Modal title="🔑 Change Password" onClose={() => setShowProfile(false)}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, padding: 12, background: "rgba(255,255,255,0.03)", borderRadius: 12 }}>
-            <div style={{ width: 50, height: 50, borderRadius: 14, background: isAdmin ? "linear-gradient(135deg,#f59e0b,#d97706)" : "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 22, color: "#fff" }}>{currentUser.name.charAt(0)}</div>
-            <div>
-              <div style={{ fontWeight: 700, color: "#e8f4fd", fontSize: 16 }}>{currentUser.name}</div>
-              <div style={{ fontSize: 12, color: "#3a5a70" }}>@{currentUser.username}</div>
-            </div>
-          </div>
-          <Field label="Current Password *"><input type="password" style={IS} value={profileEdit.oldPassword} onChange={e => setProfileEdit(p => ({ ...p, oldPassword: e.target.value }))} /></Field>
-          <Field label="New Password *"><input type="password" style={IS} value={profileEdit.newPassword} onChange={e => setProfileEdit(p => ({ ...p, newPassword: e.target.value }))} placeholder="Min 4 chars" /></Field>
-          <Field label="Confirm *"><input type="password" style={IS} value={profileEdit.confirmPassword} onChange={e => setProfileEdit(p => ({ ...p, confirmPassword: e.target.value }))} /></Field>
-          <button onClick={handleChangePassword} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Change Password</button>
-        </Modal>
-      )}
-
-      {showPayment && (() => {
-        const cl = clients.find(c => c.id === showPayment.clientId);
-        const ln = cl?.loans?.find(l => l.id === showPayment.loanId);
-        const amt = parseFloat(paymentAmount) || 0;
-        const exp = ln?.dailyPayment || 0;
-        const isOver = amt > exp;
-        const isUnder = amt > 0 && amt < exp;
-        return (
-          <Modal title="Record Payment" onClose={() => { setShowPayment(null); setPaymentAmount("");if (customAmt) { handlePayment(customAmt); return; } setPaymentPreview(null); }}>
-            <div style={{ textAlign: "center", marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: "#3a5a70" }}>Expected</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(exp)}</div>
-              <div style={{ fontSize: 11, color: "#3a5a70", marginTop: 4 }}>Day {showPayment.scheduleIdx + 1} · {cl?.name}</div>
-            </div>
-            <Field label="Amount (₦)">
-              <input type="number" style={IS} value={paymentAmount} onChange={e => {
-                setPaymentAmount(e.target.value);
-                const a = parseFloat(e.target.value) || 0;
-                if (a > 0 && ln) setPaymentPreview(computePP(ln, showPayment.scheduleIdx, a));
-                else setPaymentPreview(null);
-              }} autoFocus />
-            </Field>
-            {paymentPreview && amt > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                {isOver && <div style={{ background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#a78bfa" }}>⚡ Cascade: +{fc(amt - exp)} · {paymentPreview.daysCleared} day{paymentPreview.daysCleared !== 1 ? "s" : ""}</div></div>}
-                {isUnder && <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12, padding: 12 }}><div style={{ fontSize: 12, fontWeight: 700, color: "#f87171" }}>⚠️ Shortfall: {fc(exp - amt)}</div></div>}
-                {!isOver && !isUnder && <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 12, padding: "10px", textAlign: "center" }}><span style={{ color: "#4ade80", fontWeight: 700 }}>✓ Exact</span></div>}
+                )}
               </div>
             )}
-            <button onClick={handlePayment} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Confirm {isOver ? "(+Cascade)" : isUnder ? "(Partial)" : ""}</button>
-          </Modal>
-        );
-      })()}
 
-      {/* PRIORITY 4: Restructure Modal */}
-      {showRestructure && (
-        <Modal title="🔄 Restructure Loan" onClose={() => setShowRestructure(null)}>
-          <div style={{ background: "rgba(192,132,252,0.08)", border: "1px solid rgba(192,132,252,0.2)", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: "#c084fc", fontWeight: 700, marginBottom: 4 }}>Current Daily Payment</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "#c084fc", fontFamily: "'Courier New',monospace" }}>{fc(showRestructure.dailyPayment)}</div>
-            <div style={{ fontSize: 10, color: "#7a5a9a", marginTop: 4 }}>
-              Unpaid days: {showRestructure.schedule?.filter(s => !s.paid).length || 0} · 
-              Total unpaid: {fc(showRestructure.schedule?.filter(s => !s.paid).reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0) || 0)}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "#e8f4fd" }}>Recent Activity</div>
+              <button onClick={() => setView("clients")} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", fontSize: 11, cursor: "pointer", padding: "6px 12px", borderRadius: 9, fontWeight: 700 }}>View All →</button>
             </div>
+            {visibleClients.slice(0, 5).map(c => {
+              const { active, overdue, balance } = getClientSummary(c);
+              const risk = computeClientRisk(c);
+              return (
+                <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); }} style={{ background: "linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))", border: `1px solid ${risk.level === "red" ? "rgba(239,68,68,0.2)" : "rgba(100,180,255,0.08)"}`, borderRadius: 14, padding: "14px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 42, height: 42, borderRadius: 12, background: `linear-gradient(135deg,${risk.level === "red" ? "#7f1d1d,#dc2626" : risk.level === "amber" ? "#92400e,#f59e0b" : "#1d4ed8,#3b82f6"})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff" }}>{c.name.charAt(0).toUpperCase()}</div>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontWeight: 700, color: "#e8f4fd", fontSize: 14 }}>{c.name}</span>
+                        <span>{risk.emoji}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#5a7a90" }}>{c.phone}{overdue > 0 && <span style={{ color: "#f87171", fontWeight: 700 }}> · {overdue} overdue</span>}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    {active ? (
+                      <>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div>
+                        <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>Balance</div>
+                      </>
+                    ) : <div style={{ fontSize: 11, color: "#3a5a70" }}>No active loan</div>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <Field label="New Daily Amount (₦) *">
-            <input type="number" style={IS} value={restructureInput.newDailyAmount} onChange={e => setRestructureInput(p => ({ ...p, newDailyAmount: e.target.value }))} autoFocus />
-          </Field>
-          {restructureInput.newDailyAmount && (() => {
-            const newAmt = parseFloat(restructureInput.newDailyAmount) || 0;
-            const unpaidOwed = showRestructure.schedule?.filter(s => !s.paid).reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0) || 0;
-            const newDays = newAmt > 0 ? Math.ceil(unpaidOwed / newAmt) : 0;
-            return (
-              <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
-                <div style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, marginBottom: 4 }}>Preview</div>
-                <div style={{ fontSize: 12, color: "#c8dde8" }}>{newDays} new payment days</div>
+        )}
+
+        {/* ── CLIENTS LIST ── */}
+        {(!isAdmin || adminMode === "admin") && view === "clients" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>Clients</h1>
+                <p style={{ margin: "4px 0 0", color: "#3a5a70", fontSize: 13 }}>{filteredClients.length} of {visibleClients.length}</p>
               </div>
-            );
-          })()}
-          <Field label="Reason / Note *">
-            <input style={IS} value={restructureInput.reason} onChange={e => setRestructureInput(p => ({ ...p, reason: e.target.value }))} placeholder="e.g. Client hardship, agreed new terms" />
-          </Field>
-          <div style={{ background: "rgba(245,158,11,0.08)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, fontSize: 11, color: "#f59e0b" }}>
-            ⚠️ This will recalculate the remaining schedule. Past payments are preserved. This action is logged with your name and date.
-          </div>
-          <button onClick={handleRestructure} style={{ width: "100%", background: "linear-gradient(135deg,#c084fc,#a855f7)", border: "none", color: "#fff", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Apply Restructure</button>
-        </Modal>
-      )}
-
-      {adminEditInstallment && (
-        <Modal title="🛠️ Override" onClose={() => setAdminEditInstallment(null)}>
-          <div style={{ background: "rgba(245,158,11,0.08)", borderRadius: 10, padding: 12, fontSize: 12, color: "#f59e0b", marginBottom: 16 }}>Installment {adminEditInstallment.idx + 1} — {adminEditInstallment.client.name}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-            <label style={{ fontSize: 12, color: "#8ab4c8", flexGrow: 1 }}>Paid?</label>
-            <input type="checkbox" style={{ width: 20, height: 20, accentColor: "#22c55e" }} checked={adminInstOverride.paid} onChange={e => setAdminInstOverride(p => ({ ...p, paid: e.target.checked }))} />
-          </div>
-          {adminInstOverride.paid && (
-            <>
-              <Field label="Amount"><input type="number" style={IS} value={adminInstOverride.paidAmount} onChange={e => setAdminInstOverride(p => ({ ...p, paidAmount: e.target.value }))} /></Field>
-              <Field label="Date"><input type="date" style={IS} value={adminInstOverride.paidDate} onChange={e => setAdminInstOverride(p => ({ ...p, paidDate: e.target.value }))} /></Field>
-            </>
-          )}
-          <Field label="Due Date"><input type="date" style={IS} value={adminInstOverride.dueDate} onChange={e => setAdminInstOverride(p => ({ ...p, dueDate: e.target.value }))} /></Field>
-          <button onClick={handleAdminInstOverride} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Apply</button>
-        </Modal>
-      )}
-
-      {showSavingsTx && (
-        <Modal title={showSavingsTx.type === "deposit" ? "📥 Deposit" : "📤 Withdraw"} onClose={() => setShowSavingsTx(null)}>
-          <div style={{ background: "rgba(168,85,247,0.08)", borderRadius: 10, padding: "9px 13px", marginBottom: 16, fontSize: 13, color: "#c084fc" }}>{showSavingsTx.client.name} · Bal: {fc(showSavingsTx.client.savingsBalance || 0)}</div>
-          <Field label="Amount"><input type="number" style={IS} value={savingsAmount} onChange={e => setSavingsAmount(e.target.value)} autoFocus /></Field>
-          <button onClick={handleSavingsTransaction} style={{ width: "100%", background: "linear-gradient(135deg,#a855f7,#7c3aed)", border: "none", color: "#fff", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800, marginBottom: isAdmin ? 20 : 0 }}>{showSavingsTx.type === "deposit" ? "Deposit" : "Withdraw"}</button>
-          {isAdmin && (
-            <div style={{ borderTop: "1px dashed rgba(255,255,255,0.1)", paddingTop: 16 }}>
-              <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 8 }}>🛡️ Override</div>
-              <Field label="Set Balance"><input type="number" style={{ ...IS, border: "1px solid rgba(245,158,11,0.3)" }} value={adminDirectSavingsInput} onChange={e => setAdminDirectSavingsInput(e.target.value)} /></Field>
-              <button onClick={handleAdminSavingsAdj} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: 10, borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>Force</button>
+              <button onClick={() => setShowAddClient(true)} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "10px 16px", borderRadius: 11, cursor: "pointer", fontWeight: 800, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} />Add</button>
             </div>
-          )}
-        </Modal>
-      )}
+            <div style={{ position: "relative", marginBottom: 12 }}>
+              <input placeholder="Search name or phone..." value={clientSearch} onChange={e => setClientSearch(e.target.value)} style={{ ...IS, paddingLeft: 38 }} />
+              <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#3a5a70" }}><Icon name="search" size={15} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+              {[["all", "All"], ["active", "Active"], ["completed", "Done"], ["none", "No Loan"], ["red", "🔴 High"], ["amber", "🟡 Watch"]].map(([k, v]) => (
+                <button key={k} onClick={() => setClientFilter(k)} style={{ background: clientFilter === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "rgba(255,255,255,0.04)", border: "none", color: clientFilter === k ? "#fff" : "#5a7a90", padding: "7px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, whiteSpace: "nowrap" }}>{v}</button>
+              ))}
+            </div>
+            {filteredClients.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "#3a5a70" }}>No clients found</div>
+            ) : filteredClients.map(c => {
+              const { active, overdue, balance } = getClientSummary(c);
+              const risk = computeClientRisk(c);
+              return (
+                <div key={c.id} onClick={() => { setSelectedClientId(c.id); setView("detail"); }} style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${risk.level === "red" ? "rgba(239,68,68,0.2)" : "rgba(100,180,255,0.08)"}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 10, background: `linear-gradient(135deg,${risk.level === "red" ? "#7f1d1d,#dc2626" : risk.level === "amber" ? "#92400e,#f59e0b" : "#1d4ed8,#3b82f6"})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff", fontSize: 15 }}>{c.name.charAt(0).toUpperCase()}</div>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>{c.name}</span>
+                        <span>{risk.emoji}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "#3a5a70" }}>{c.phone}{overdue > 0 && ` · ${overdue} overdue`}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    {active ? <div style={{ fontSize: 12, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div> : <div style={{ fontSize: 10, color: "#3a5a70" }}>No loan</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
-      {/* PRIORITY 5: Add Client with Guarantor fields */}
+        {/* ── CLIENT DETAIL ── */}
+        {(!isAdmin || adminMode === "admin") && view === "detail" && currentClient && (
+          <div>
+            <button onClick={() => setView("clients")} style={{ background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "7px 12px", borderRadius: 9, cursor: "pointer", marginBottom: 14, display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}><Icon name="back" size={13} />Back</button>
+
+            <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.1),rgba(34,197,94,0.06))", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 18, padding: 18, marginBottom: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 56, height: 56, borderRadius: 14, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 900, color: "#fff" }}>{currentClient.name.charAt(0).toUpperCase()}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#e8f4fd" }}>{currentClient.name}</div>
+                  <div style={{ fontSize: 12, color: "#8ab4c8", marginTop: 2 }}>📞 {currentClient.phone}</div>
+                  <div style={{ marginTop: 5 }}>{(() => { const r = computeClientRisk(currentClient); return <Badge color={r.color} bg={r.bg}>{r.emoji} {r.label}</Badge>; })()}</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {currentClient.address && <div style={{ fontSize: 11, color: "#8ab4c8" }}>📍 {currentClient.address}</div>}
+                {currentClient.idNumber && <div style={{ fontSize: 11, color: "#8ab4c8" }}>🆔 {currentClient.idNumber}</div>}
+                {currentClient.occupation && <div style={{ fontSize: 11, color: "#8ab4c8" }}>💼 {currentClient.occupation}</div>}
+                {currentClient.assignedToName && <div style={{ fontSize: 11, color: "#8ab4c8" }}>👤 {currentClient.assignedToName}</div>}
+              </div>
+              {currentClient.guarantorName && (
+                <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: 10 }}>
+                  <div style={{ fontSize: 10, color: "#5a7a90", marginBottom: 4 }}>GUARANTOR</div>
+                  <div style={{ fontSize: 12, color: "#e8f4fd", fontWeight: 600 }}>{currentClient.guarantorName}</div>
+                  <div style={{ fontSize: 10, color: "#8ab4c8", marginTop: 2 }}>{currentClient.guarantorPhone} · {currentClient.guarantorRelationship}</div>
+                  {currentClient.guarantorOccupation && <div style={{ fontSize: 10, color: "#8ab4c8" }}>💼 {currentClient.guarantorOccupation}</div>}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+                <button onClick={() => setShowEditClient(currentClient)} style={{ flex: 1, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Edit</button>
+                {isAdmin && <button onClick={() => setShowAssignClient(currentClient)} style={{ flex: 1, background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.2)", color: "#a78bfa", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Reassign</button>}
+                {isAdmin && <button onClick={() => setConfirmDelete(currentClient)} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Delete</button>}
+              </div>
+            </div>
+
+            {isAdmin && <FP fin={{ ...clientFin, totalCapital: clientFin.capital }} isClient />}
+
+            {!activeLoan && (
+              <button onClick={() => setShowAddLoan(true)} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 14 }}>+ {isAdmin ? "Issue Loan" : "Request Loan"}</button>
+            )}
+
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "rgba(0,0,0,0.25)", borderRadius: 10 }}>
+              {[["loans", `Loans (${currentClient.loans?.length || 0})`], ["savings", "Savings"], ["history", "History"]].map(([k, v]) => (
+                <button key={k} onClick={() => setActiveTab(k)} style={{ flex: 1, background: activeTab === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "transparent", border: "none", color: activeTab === k ? "#fff" : "#5a7a90", padding: "8px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>{v}</button>
+              ))}
+            </div>
+
+            {activeTab === "loans" && (
+              <div>
+                {(!currentClient.loans || currentClient.loans.length === 0) ? (
+                  <div style={{ textAlign: "center", padding: 30, color: "#3a5a70" }}>No loans yet</div>
+                ) : currentClient.loans.map((l, idx) => (
+                  <LCC key={l.id} loan={l} num={idx + 1} total={currentClient.loans.length} isAdmin={isAdmin} today={today} onPay={(loan, i, customAmt) => {
+                    if (customAmt) {
+                      handleDirectPay(currentClient.id, loan.id, i, customAmt);
+                    } else {
+                      setShowPayment({ clientId: currentClient.id, loanId: loan.id, scheduleIdx: i });
+                      setPaymentAmount(loan.schedule[i].payment.toFixed(2));
+                    }
+                  }} onOverride={(loan, i, s) => {
+                    setAdminEditInstallment({ client: currentClient, loan, idx: i });
+                    setAdminInstOverride({ paid: s.paid, paidAmount: s.paidAmount || 0, dueDate: s.dueDate, paidDate: s.paidDate || todayStr });
+                  }} onRestructure={loan => setShowRestructure(loan)} />
+                ))}
+              </div>
+            )}
+
+            {activeTab === "savings" && (
+              <div>
+                <div style={{ background: "linear-gradient(135deg,rgba(167,139,250,0.1),rgba(139,92,246,0.06))", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 14, padding: 18, marginBottom: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 11, color: "#c4b5fd", letterSpacing: 1 }}>SAVINGS BALANCE</div>
+                  <div style={{ fontSize: 28, fontWeight: 900, color: "#a78bfa", fontFamily: "'Courier New',monospace", marginTop: 6 }}>{fc(currentClient.savingsBalance || 0)}</div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <button onClick={() => setShowSavingsTx({ type: "deposit", client: currentClient })} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📥 Deposit</button>
+                  <button onClick={() => setShowSavingsTx({ type: "withdraw", client: currentClient })} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📤 Withdraw</button>
+                </div>
+                {(currentClient.savingsLogs || []).map(log => (
+                  <div key={log.id} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: log.type === "deposit" ? "#4ade80" : log.type === "withdraw" ? "#f87171" : "#c084fc" }}>{log.type === "deposit" ? "📥 Deposit" : log.type === "withdraw" ? "📤 Withdrawal" : "🛡️ Adjustment"}</div>
+                      <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>{fd(log.date)}{log.recordedBy ? ` · ${log.recordedBy}` : ""}</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{fc(log.amount)}</div>
+                      <div style={{ fontSize: 9, color: "#3a5a70" }}>Bal: {fc(log.balanceAfter)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {activeTab === "history" && (
+              <div>
+                {getClientTransactions(currentClient).length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 30, color: "#3a5a70" }}>No transactions</div>
+                ) : getClientTransactions(currentClient).map(tx => (
+                  <div key={tx.id} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 18 }}>{tx.icon}</span>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: tx.color }}>{tx.description}</div>
+                        <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>{tx.detail}</div>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: tx.color, fontFamily: "'Courier New',monospace" }}>{fc(tx.amount)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── STAFF (Admin only) ── */}
+        {isAdmin && adminMode === "admin" && view === "staff" && (
+          <StaffPanel users={users} clients={clients} pendingLoans={pendingLoans} currentUser={currentUser} onUpdateUsers={saveUsers} onApproveLoan={handleApproveLoan} onRejectLoan={handleRejectLoan} showToast={showToast} />
+        )}
+      </main>
+
+      {/* BOTTOM NAV */}
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(6,15,26,0.95)", backdropFilter: "blur(12px)", borderTop: "1px solid rgba(100,180,255,0.1)", display: "flex", justifyContent: "space-around", padding: "8px 4px 12px", zIndex: 40 }}>
+        {[["dashboard", "Overview", "dashboard"], ["clients", "Clients", "user"]].map(([v, l, i]) => (
+          <button key={v} onClick={() => { setView(v); if (isAdmin) setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === v && (adminMode === "admin" || !isAdmin) ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
+            <Icon name={i} size={18} />
+            <span style={{ fontSize: 9, fontWeight: 700 }}>{l}</span>
+          </button>
+        ))}
+        {isAdmin && (
+          <button onClick={() => setAdminMode("accountant")} style={{ background: "none", border: "none", color: adminMode === "accountant" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
+            <Icon name="account" size={18} />
+            <span style={{ fontSize: 9, fontWeight: 700 }}>Accounts</span>
+          </button>
+        )}
+        {isAdmin && (
+          <button onClick={() => { setView("staff"); setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === "staff" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
+            <Icon name="users" size={18} />
+            <span style={{ fontSize: 9, fontWeight: 700 }}>Staff</span>
+          </button>
+        )}
+      </nav>
+
+      {/* ── MODALS ── */}
       {showAddClient && (
         <Modal title="Register Client" onClose={() => setShowAddClient(false)}>
           <Field label="Name *"><input style={IS} value={newClient.name} onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
           <Field label="Phone *"><input style={IS} value={newClient.phone} onChange={e => setNewClient(p => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label="Address"><input style={IS} value={newClient.address} onChange={e => setNewClient(p => ({ ...p, address: e.target.value }))} /></Field>
-          <Field label="Occupation">
-  <input style={IS} value={newClient.occupation} onChange={e => setNewClient(p => ({ ...p, occupation: e.target.value }))} placeholder="e.g. Trader, Teacher, Farmer" />
-</Field>
           <Field label="ID/BVN"><input style={IS} value={newClient.idNumber} onChange={e => setNewClient(p => ({ ...p, idNumber: e.target.value }))} /></Field>
-          <div style={{ borderTop: "1px solid rgba(245,158,11,0.15)", paddingTop: 14, marginTop: 4, marginBottom: 4 }}>
-            <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 12 }}>🛡️ Guarantor (Optional)</div>
-            <Field label="Guarantor Name"><input style={IS} value={newClient.guarantorName} onChange={e => setNewClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
-            <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
-            <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
+          <Field label="Occupation"><input style={IS} value={newClient.occupation} onChange={e => setNewClient(p => ({ ...p, occupation: e.target.value }))} placeholder="e.g. Trader, Teacher, Farmer" /></Field>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "16px 0 14px", paddingTop: 12 }}>
+            <div style={{ fontSize: 12, color: "#f59e0b", fontWeight: 700, marginBottom: 10 }}>🛡️ Guarantor (Optional)</div>
           </div>
-          <Field label="Guarantor Occupation">
-  <input style={IS} value={newClient.guarantorOccupation} onChange={e => setNewClient(p => ({ ...p, guarantorOccupation: e.target.value }))} placeholder="e.g. Civil Servant, Business Owner" />
-</Field>
-          <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Register</button>
+          <Field label="Guarantor Name"><input style={IS} value={newClient.guarantorName} onChange={e => setNewClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
+          <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
+          <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
+          <Field label="Guarantor Occupation"><input style={IS} value={newClient.guarantorOccupation} onChange={e => setNewClient(p => ({ ...p, guarantorOccupation: e.target.value }))} placeholder="e.g. Civil Servant, Business Owner" /></Field>
+          <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14 }}>✓ Register</button>
         </Modal>
       )}
 
-      {/* PRIORITY 5: Edit Client with Guarantor fields */}
       {showEditClient && (
         <Modal title="Edit Client" onClose={() => setShowEditClient(null)}>
-          <Field label="Name"><input style={IS} value={showEditClient.name} onChange={e => setShowEditClient(p => ({ ...p, name: e.target.value }))} /></Field>
-          <Field label="Phone"><input style={IS} value={showEditClient.phone} onChange={e => setShowEditClient(p => ({ ...p, phone: e.target.value }))} /></Field>
+          <Field label="Name *"><input style={IS} value={showEditClient.name} onChange={e => setShowEditClient(p => ({ ...p, name: e.target.value }))} /></Field>
+          <Field label="Phone *"><input style={IS} value={showEditClient.phone} onChange={e => setShowEditClient(p => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label="Address"><input style={IS} value={showEditClient.address || ""} onChange={e => setShowEditClient(p => ({ ...p, address: e.target.value }))} /></Field>
           <Field label="ID/BVN"><input style={IS} value={showEditClient.idNumber || ""} onChange={e => setShowEditClient(p => ({ ...p, idNumber: e.target.value }))} /></Field>
-          <div style={{ borderTop: "1px solid rgba(245,158,11,0.15)", paddingTop: 14, marginTop: 4, marginBottom: 4 }}>
-            <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700, marginBottom: 12 }}>🛡️ Guarantor</div>
-            <Field label="Guarantor Name"><input style={IS} value={showEditClient.guarantorName || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
-            <Field label="Guarantor Phone"><input style={IS} value={showEditClient.guarantorPhone || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
-            <Field label="Relationship"><input style={IS} value={showEditClient.guarantorRelationship || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
+          <Field label="Occupation"><input style={IS} value={showEditClient.occupation || ""} onChange={e => setShowEditClient(p => ({ ...p, occupation: e.target.value }))} /></Field>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "16px 0 14px", paddingTop: 12 }}>
+            <div style={{ fontSize: 12, color: "#f59e0b", fontWeight: 700, marginBottom: 10 }}>🛡️ Guarantor</div>
           </div>
-          <button onClick={handleUpdateClient} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Save</button>
-        </Modal>
-      )}
-
-      {showAssignClient && (
-        <Modal title="Reassign" onClose={() => setShowAssignClient(null)}>
-          {users.filter(u => u.active).map(u => (
-            <button key={u.id} onClick={() => handleAssignClient(showAssignClient.id, u.id)} style={{ width: "100%", background: showAssignClient.assignedTo === u.id ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.03)", border: showAssignClient.assignedTo === u.id ? "1px solid rgba(34,197,94,0.3)" : "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: "11px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff", fontSize: 13 }}>{u.name.charAt(0)}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#dceef8" }}>{u.name}</div>
-              </div>
-              <RB role={u.role} />
-            </button>
-          ))}
+          <Field label="Guarantor Name"><input style={IS} value={showEditClient.guarantorName || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorName: e.target.value }))} /></Field>
+          <Field label="Guarantor Phone"><input style={IS} value={showEditClient.guarantorPhone || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
+          <Field label="Relationship"><input style={IS} value={showEditClient.guarantorRelationship || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorRelationship: e.target.value }))} /></Field>
+          <Field label="Guarantor Occupation"><input style={IS} value={showEditClient.guarantorOccupation || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorOccupation: e.target.value }))} /></Field>
+          <button onClick={handleUpdateClient} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Save</button>
         </Modal>
       )}
 
       {showAddLoan && (
         <Modal title={isAdmin ? "Issue Loan" : "Request Loan"} onClose={() => setShowAddLoan(false)}>
-          <div style={{ background: isAdmin ? "rgba(59,130,246,0.08)" : "rgba(245,158,11,0.08)", borderRadius: 9, padding: "9px 13px", marginBottom: 16, fontSize: 13, color: isAdmin ? "#93c5fd" : "#f59e0b" }}>{isAdmin ? "For: " : "Requesting: "}<strong>{selectedClient?.name}</strong></div>
-          <Field label="Principal (₦) *"><input type="number" style={IS} value={newLoan.principal} onChange={e => setNewLoan(p => ({ ...p, principal: e.target.value }))} /></Field>
-          <Field label="Interest (%)"><input type="number" style={IS} value={newLoan.interestRate} onChange={e => setNewLoan(p => ({ ...p, interestRate: e.target.value }))} /></Field>
+          <Field label="Principal *"><input type="number" style={IS} value={newLoan.principal} onChange={e => setNewLoan(p => ({ ...p, principal: e.target.value }))} autoFocus /></Field>
+          <Field label="Interest Rate (%)"><input type="number" style={IS} value={newLoan.interestRate} onChange={e => setNewLoan(p => ({ ...p, interestRate: e.target.value }))} /></Field>
           <Field label="Days"><input type="number" style={IS} value={newLoan.days} onChange={e => setNewLoan(p => ({ ...p, days: e.target.value }))} /></Field>
-          <Field label="Start"><input type="date" style={IS} value={newLoan.startDate} onChange={e => setNewLoan(p => ({ ...p, startDate: e.target.value }))} /></Field>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0 16px" }}>
-            <span style={{ fontSize: 12, color: "#8ab4c8" }}>Skip Weekends?</span>
-            <input type="checkbox" style={{ width: 20, height: 20, accentColor: "#22c55e" }} checked={newLoan.excludeWeekends} onChange={e => setNewLoan(p => ({ ...p, excludeWeekends: e.target.checked }))} />
-          </div>
-          {newLoan.principal && (() => {
-            const p = parseFloat(newLoan.principal) || 0;
-            const r = parseFloat(newLoan.interestRate) || 0;
-            const d = parseInt(newLoan.days) || 1;
-            const t = p + (p * r / 100);
-            return (
-              <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: 12, marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div><div style={{ fontSize: 10, color: "#3a5a70" }}>TOTAL</div><div style={{ color: "#4ade80", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t)}</div></div>
-                <div><div style={{ fontSize: 10, color: "#3a5a70" }}>DAILY</div><div style={{ color: "#60a5fa", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(t / d)}</div></div>
-              </div>
-            );
-          })()}
-          <button onClick={isAdmin ? handleAddLoan : handleRequestLoan} style={{ width: "100%", background: isAdmin ? "linear-gradient(135deg,#22c55e,#16a34a)" : "linear-gradient(135deg,#f59e0b,#d97706)", border: "none", color: "#000", padding: 12, borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>{isAdmin ? "✓ Issue" : "📤 Submit"}</button>
+          <Field label="Start Date"><input type="date" style={IS} value={newLoan.startDate} onChange={e => setNewLoan(p => ({ ...p, startDate: e.target.value }))} /></Field>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
+            <input type="checkbox" checked={newLoan.excludeWeekends} onChange={e => setNewLoan(p => ({ ...p, excludeWeekends: e.target.checked }))} />
+            <span style={{ fontSize: 12, color: "#8ab4c8" }}>Exclude weekends & holidays</span>
+          </label>
+          <button onClick={isAdmin ? handleAddLoan : handleRequestLoan} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ {isAdmin ? "Issue" : "Request"}</button>
         </Modal>
       )}
 
-      {showSettings && (
-        <Modal title="⚙️ Settings" onClose={() => setShowSettings(false)}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 11, background: isAdmin ? "linear-gradient(135deg,#f59e0b,#d97706)" : "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 16, color: "#fff" }}>{currentUser.name.charAt(0)}</div>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#e8f4fd" }}>{currentUser.name}</div>
-                  <div style={{ fontSize: 11, color: "#3a5a70" }}>@{currentUser.username}</div>
-                  <RB role={currentUser.role} />
-                </div>
+      {showPayment && (
+        <Modal title="Record Payment" onClose={() => { setShowPayment(null); setPaymentAmount(""); }}>
+          <Field label="Amount *"><input type="number" style={IS} value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} autoFocus /></Field>
+          <button onClick={() => handlePayment()} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Record</button>
+        </Modal>
+      )}
+
+      {showSavingsTx && (
+        <Modal title={showSavingsTx.type === "deposit" ? "📥 Deposit" : "📤 Withdrawal"} onClose={() => { setShowSavingsTx(null); setSavingsAmount(""); setAdminDirectSavingsInput(""); }}>
+          <Field label="Amount"><input type="number" style={IS} value={savingsAmount} onChange={e => setSavingsAmount(e.target.value)} autoFocus /></Field>
+          <button onClick={handleSavingsTransaction} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, marginBottom: isAdmin ? 10 : 0 }}>✓ Confirm</button>
+          {isAdmin && (
+            <>
+              <div style={{ margin: "14px 0", padding: 10, background: "rgba(167,139,250,0.06)", borderRadius: 10 }}>
+                <div style={{ fontSize: 11, color: "#a78bfa", fontWeight: 700, marginBottom: 6 }}>🛡️ Admin: Set exact balance</div>
+                <input type="number" style={IS} value={adminDirectSavingsInput} onChange={e => setAdminDirectSavingsInput(e.target.value)} placeholder="New balance..." />
               </div>
-            </div>
-            <div style={{ background: "rgba(34,197,94,0.06)", borderRadius: 10, padding: "10px 14px" }}>
-              <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 700 }}>☁️ Firebase Synced</div>
-            </div>
-            {/* PRIORITY 6: Last backup display in settings */}
-            {isAdmin && (
-              <div style={{ background: "rgba(245,158,11,0.06)", borderRadius: 10, padding: "10px 14px" }}>
-                <div style={{ fontSize: 11, color: "#f59e0b", fontWeight: 700 }}>💾 Last Backup</div>
-                <div style={{ fontSize: 11, color: "#7a6030", marginTop: 2 }}>{lastBackupDate ? fd(lastBackupDate) : "Never backed up"}</div>
-              </div>
-            )}
-            {isAdmin && (
-              <>
-                <button onClick={() => { exportData(); setShowSettings(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📤 Backup Now</button>
-                <label style={{ display: "block", width: "100%", background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.25)", color: "#60a5fa", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700, textAlign: "center", boxSizing: "border-box" }}>
-                  📥 Restore
-                  <input type="file" accept=".json" style={{ display: "none" }} onChange={e => {
-                    if (e.target.files[0]) {
-                      const reader = new FileReader();
-                      reader.onload = ev => {
-                        try {
-                          const d = JSON.parse(ev.target.result);
-                          if (d.clients) { saveClients(d.clients); if (d.users) saveUsers(d.users); if (d.pendingLoans) savePending(d.pendingLoans); setShowSettings(false); showToast(`✅ ${d.clients.length} restored!`); }
-                          else showToast("Invalid", "error");
-                        } catch { showToast("Error", "error"); }
-                      };
-                      reader.readAsText(e.target.files[0]);
-                    }
-                  }} />
-                </label>
-                <button onClick={() => { if (window.confirm("Delete ALL?")) { saveClients([]); savePending([]); setShowSettings(false); showToast("Cleared", "error"); } }} style={{ width: "100%", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", padding: 10, borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>🗑️ Clear All</button>
-              </>
-            )}
-            <button onClick={() => setCurrentUser(null)} style={{ width: "100%", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#f87171", padding: 11, borderRadius: 10, cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Icon name="logout" size={14} />Sign Out
+              <button onClick={handleAdminSavingsAdj} style={{ width: "100%", background: "#c084fc", border: "none", color: "#000", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 800 }}>Set Balance</button>
+            </>
+          )}
+        </Modal>
+      )}
+
+      {adminEditInstallment && (
+        <Modal title="Admin: Edit Installment" onClose={() => setAdminEditInstallment(null)}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer" }}>
+            <input type="checkbox" checked={adminInstOverride.paid} onChange={e => setAdminInstOverride(p => ({ ...p, paid: e.target.checked }))} />
+            <span style={{ fontSize: 13, color: "#e8f4fd" }}>Mark as paid</span>
+          </label>
+          <Field label="Paid Amount"><input type="number" style={IS} value={adminInstOverride.paidAmount} onChange={e => setAdminInstOverride(p => ({ ...p, paidAmount: e.target.value }))} /></Field>
+          <Field label="Due Date"><input type="date" style={IS} value={adminInstOverride.dueDate} onChange={e => setAdminInstOverride(p => ({ ...p, dueDate: e.target.value }))} /></Field>
+          <Field label="Paid Date"><input type="date" style={IS} value={adminInstOverride.paidDate} onChange={e => setAdminInstOverride(p => ({ ...p, paidDate: e.target.value }))} /></Field>
+          <button onClick={handleAdminInstOverride} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Apply</button>
+        </Modal>
+      )}
+
+      {showRestructure && (
+        <Modal title="🔄 Restructure Loan" onClose={() => { setShowRestructure(null); setRestructureInput({ newDailyAmount: "", reason: "" }); }}>
+          <Field label="New Daily Amount *"><input type="number" style={IS} value={restructureInput.newDailyAmount} onChange={e => setRestructureInput(p => ({ ...p, newDailyAmount: e.target.value }))} autoFocus /></Field>
+          <Field label="Reason *"><textarea style={{ ...IS, minHeight: 60, resize: "vertical" }} value={restructureInput.reason} onChange={e => setRestructureInput(p => ({ ...p, reason: e.target.value }))} placeholder="Why is this loan being restructured?" /></Field>
+          <button onClick={handleRestructure} style={{ width: "100%", background: "linear-gradient(135deg,#c084fc,#a855f7)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Restructure</button>
+        </Modal>
+      )}
+
+      {showAssignClient && (
+        <Modal title="Reassign Client" onClose={() => setShowAssignClient(null)}>
+          {users.filter(u => u.role !== "admin" && u.active).map(o => (
+            <button key={o.id} onClick={() => handleAssignClient(showAssignClient.id, o.id)} style={{ width: "100%", background: showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)"}`, color: "#e8f4fd", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, marginBottom: 6, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>{o.name}</span>
+              {showAssignClient.assignedTo === o.id && <Icon name="check" size={14} />}
             </button>
-          </div>
+          ))}
         </Modal>
       )}
 
       {confirmDelete && (
-        <Modal title="Delete?" onClose={() => setConfirmDelete(null)}>
-          <p style={{ color: "#8ab4c8", fontSize: 14, marginBottom: 20 }}>Permanently delete this client?</p>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#8ab4c8", padding: 11, borderRadius: 11, cursor: "pointer", fontWeight: 700 }}>Cancel</button>
-            <button onClick={() => handleDeleteClient(confirmDelete)} style={{ flex: 1, background: "linear-gradient(135deg,#dc2626,#b91c1c)", border: "none", color: "#fff", padding: 11, borderRadius: 11, cursor: "pointer", fontWeight: 700 }}>Delete</button>
+        <Modal title="⚠️ Confirm Delete" onClose={() => setConfirmDelete(null)}>
+          <div style={{ padding: 14, background: "rgba(239,68,68,0.08)", borderRadius: 10, marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: "#f87171", fontWeight: 700 }}>Delete {confirmDelete.name}?</div>
+            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 4 }}>All loan and savings data will be lost.</div>
           </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>Cancel</button>
+            <button onClick={() => handleDeleteClient(confirmDelete.id)} style={{ flex: 1, background: "#ef4444", border: "none", color: "#fff", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 800 }}>Delete</button>
+          </div>
+        </Modal>
+      )}
+
+      {showProfile && (
+        <Modal title="👤 Profile" onClose={() => setShowProfile(false)}>
+          <div style={{ padding: 14, background: "rgba(59,130,246,0.06)", borderRadius: 10, marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#e8f4fd" }}>{currentUser.name}</div>
+            <div style={{ fontSize: 11, color: "#5a7a90", marginTop: 2 }}>@{currentUser.username} · <RB role={currentUser.role} /></div>
+          </div>
+          <div style={{ fontSize: 12, color: "#f59e0b", fontWeight: 700, marginBottom: 10 }}>🔑 Change Password</div>
+          <Field label="Current Password"><input type="password" style={IS} value={profileEdit.oldPassword} onChange={e => setProfileEdit(p => ({ ...p, oldPassword: e.target.value }))} /></Field>
+          <Field label="New Password"><input type="password" style={IS} value={profileEdit.newPassword} onChange={e => setProfileEdit(p => ({ ...p, newPassword: e.target.value }))} /></Field>
+          <Field label="Confirm New"><input type="password" style={IS} value={profileEdit.confirmPassword} onChange={e => setProfileEdit(p => ({ ...p, confirmPassword: e.target.value }))} /></Field>
+          <button onClick={handleChangePassword} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Change Password</button>
         </Modal>
       )}
     </div>
   );
-    }
+          }
