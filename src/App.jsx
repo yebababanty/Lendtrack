@@ -1401,7 +1401,7 @@ export default function App() {
   const [expandFinancials, setExpandFinancials] = useState(true);
   const [acctDateFilter, setAcctDateFilter] = useState("today");
   const [newClient, setNewClient] = useState({ name: "", phone: "", address: "", idNumber: "", occupation: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "", guarantorOccupation: "" });
-  const [newLoan, setNewLoan] = useState({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
+  const [newLoan, setNewLoan] = useState({ principal: "", interestRate: "15", days: "24", startDate: todayStr, excludeWeekends: true });
   const [showRestructure, setShowRestructure] = useState(null);
   const [restructureInput, setRestructureInput] = useState({ newDailyAmount: "", reason: "" });
   const [routeVisited, setRouteVisited] = useState({});
