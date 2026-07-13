@@ -85,7 +85,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   const updated = schedule.map(s => ({ ...s, paymentLog: [...(s.paymentLog || [])] }));
   const today = new Date();
 
-  // Find all defaulted slots (overdue + unpaid, before startIdx)
   const defaultedSlots = [];
   for (let i = 0; i < updated.length; i++) {
     if (i === startIdx) continue;
@@ -96,7 +95,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   }
   defaultedSlots.sort((a, b) => new Date(updated[a].dueDate) - new Date(updated[b].dueDate));
 
-  // Settle defaults first
   for (const defIdx of defaultedSlots) {
     if (remaining <= 0) break;
     const s = updated[defIdx];
@@ -118,7 +116,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     remaining -= here;
   }
 
-  // Apply to current slot
   if (remaining > 0 && startIdx < updated.length) {
     const s = updated[startIdx];
     const total = (s.paidAmount || 0) + remaining;
@@ -139,7 +136,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     remaining = Math.max(0, excess);
   }
 
-  // Cascade leftover to future
   let i = startIdx + 1;
   while (remaining > 0 && i < updated.length) {
     const s = updated[i];
@@ -164,7 +160,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
     i++;
   }
 
-  // Recalculate balances
   const totalDue = updated.reduce((sum, s) => sum + s.payment, 0);
   let bal = totalDue;
   for (let j = 0; j < updated.length; j++) {
@@ -203,7 +198,6 @@ function restructureLoan(loan, newDailyAmount, reason, approvedBy) {
   };
 }
 
-// ─── SHORTFALL CALCULATOR ────────────────────────────────────────────────────
 function computeTotalShortfall(loan) {
   const today = new Date();
   let totalShortfall = 0;
@@ -223,7 +217,6 @@ function computeTotalShortfall(loan) {
   return { totalShortfall, shortfallDays };
 }
 
-// ─── RISK FLAGS ──────────────────────────────────────────────────────────────
 function computeClientRisk(client) {
   const activeLoan = client.loans?.find(l => l.status === "active");
   if (!activeLoan) return { level: "none", label: "No Loan", color: "#3a5a70", bg: "rgba(100,130,150,0.08)", emoji: "⚪" };
@@ -254,7 +247,6 @@ function computeClientRisk(client) {
   }
 }
 
-// ─── DEFAULTERS ──────────────────────────────────────────────────────────────
 function computeDefaultingClientsReport(clients, monthKey) {
   const defaulters = [];
   const today = new Date();
@@ -280,7 +272,6 @@ function computeDefaultingClientsReport(clients, monthKey) {
   return defaulters.sort((a, b) => b.totalOwed - a.totalOwed);
 }
 
-// ─── FINANCIAL ENGINES ───────────────────────────────────────────────────────
 function computeFinancials(clients) {
   let totalCapital = 0, totalExpectedInterest = 0, interestEarned = 0, principalCollected = 0, totalCollected = 0;
   clients.forEach(c => {
@@ -526,13 +517,13 @@ const Icon = ({ name, size = 16 }) => {
 // ─── UI COMPONENTS ───────────────────────────────────────────────────────────
 function Modal({ title, onClose, children, wide }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.92)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(8px)" }}>
-      <div style={{ background: "#0d1b2a", border: "1px solid rgba(100,200,255,0.12)", borderRadius: 20, width: "100%", maxWidth: wide ? 580 : 480, maxHeight: "92vh", overflowY: "auto" }}>
-        <div style={{ padding: "20px 22px 14px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#0d1b2a", zIndex: 1, borderRadius: "20px 20px 0 0" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.92)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 12, backdropFilter: "blur(8px)" }}>
+      <div style={{ background: "#0d1b2a", border: "1px solid rgba(100,200,255,0.12)", borderRadius: 20, width: "100%", maxWidth: wide ? 580 : 480, maxHeight: "92vh", overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+        <div style={{ padding: "18px 20px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#0d1b2a", zIndex: 1, borderRadius: "20px 20px 0 0" }}>
           <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#e8f4fd" }}>{title}</h2>
-          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", width: 30, height: 30, borderRadius: 8, cursor: "pointer", fontSize: 17 }}>×</button>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", width: 36, height: 36, borderRadius: 10, cursor: "pointer", fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
         </div>
-        <div style={{ padding: "20px 22px" }}>{children}</div>
+        <div style={{ padding: "18px 20px" }}>{children}</div>
       </div>
     </div>
   );
@@ -547,7 +538,7 @@ function Field({ label, children }) {
   );
 }
 
-const IS = { width: "100%", padding: "10px 13px", background: "rgba(100,180,255,0.05)", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 10, color: "#e8f4fd", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+const IS = { width: "100%", padding: "12px 14px", background: "rgba(100,180,255,0.05)", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 10, color: "#e8f4fd", fontSize: 15, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
 
 function Badge({ color, bg, children }) {
   return <span style={{ fontSize: 10, padding: "2px 9px", borderRadius: 20, background: bg, color, fontWeight: 700 }}>{children}</span>;
@@ -566,7 +557,6 @@ function Toast({ msg, type }) {
   );
 }
 
-// ─── NEW: MODERN STAT CARD ──────────────────────────────────────────────────
 function ModernStatCard({ label, value, icon, gradient, danger, badge }) {
   return (
     <div style={{
@@ -575,92 +565,40 @@ function ModernStatCard({ label, value, icon, gradient, danger, badge }) {
       borderRadius: 16, padding: "14px 15px",
       position: "relative", overflow: "hidden", minHeight: 100
     }}>
-      <div style={{
-        position: "absolute", top: 0, left: 0, right: 0, height: 3,
-        background: gradient
-      }} />
-      <div style={{
-        width: 32, height: 32, borderRadius: 9,
-        background: gradient, display: "flex",
-        alignItems: "center", justifyContent: "center",
-        fontSize: 15, marginBottom: 10
-      }}>{icon}</div>
-      <div style={{
-        fontSize: 9, color: "#5a7a90", letterSpacing: 1,
-        textTransform: "uppercase", fontWeight: 700, marginBottom: 4
-      }}>{label}</div>
-      <div style={{
-        fontSize: 15, fontWeight: 900,
-        color: danger ? "#f87171" : "#ffffff",
-        fontFamily: "'Courier New',monospace", letterSpacing: -0.3
-      }}>{value}</div>
-      {badge && (
-        <div style={{
-          marginTop: 6, fontSize: 9, color: "#4ade80",
-          fontWeight: 700, display: "inline-block",
-          padding: "2px 6px", background: "rgba(74,222,128,0.1)", borderRadius: 5
-        }}>{badge}</div>
-      )}
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: gradient }} />
+      <div style={{ width: 32, height: 32, borderRadius: 9, background: gradient, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, marginBottom: 10 }}>{icon}</div>
+      <div style={{ fontSize: 9, color: "#5a7a90", letterSpacing: 1, textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 900, color: danger ? "#f87171" : "#ffffff", fontFamily: "'Courier New',monospace", letterSpacing: -0.3 }}>{value}</div>
+      {badge && (<div style={{ marginTop: 6, fontSize: 9, color: "#4ade80", fontWeight: 700, display: "inline-block", padding: "2px 6px", background: "rgba(74,222,128,0.1)", borderRadius: 5 }}>{badge}</div>)}
     </div>
   );
 }
 
-// ─── NEW: METRIC ROW ────────────────────────────────────────────────────────
 function MetricRow({ icon, label, value, color }) {
   return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "12px 14px", background: "rgba(255,255,255,0.02)",
-      borderRadius: 11, border: "1px solid rgba(255,255,255,0.04)"
-    }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 11, border: "1px solid rgba(255,255,255,0.04)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{
-          width: 32, height: 32, borderRadius: 8,
-          background: `${color}15`, display: "flex",
-          alignItems: "center", justifyContent: "center", fontSize: 14
-        }}>{icon}</div>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: `${color}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>{icon}</div>
         <div style={{ fontSize: 12, color: "#8ab4c8", fontWeight: 500 }}>{label}</div>
       </div>
-      <div style={{
-        fontSize: 14, fontWeight: 800, color: color,
-        fontFamily: "'Courier New',monospace"
-      }}>{value}</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: color, fontFamily: "'Courier New',monospace" }}>{value}</div>
     </div>
   );
 }
 
-// ─── NEW: MODERN PORTFOLIO CARD ─────────────────────────────────────────────
 function ModernPortfolioCard({ fin, expanded, onToggle }) {
   const rc = fin.realROI >= 20 ? "#22c55e" : fin.realROI >= 10 ? "#f59e0b" : "#ef4444";
   return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(16,30,50,0.9), rgba(10,20,40,0.95))",
-      border: "1px solid rgba(100,180,255,0.15)",
-      borderRadius: 18, overflow: "hidden", marginBottom: 20,
-      boxShadow: "0 8px 32px rgba(0,0,0,0.3)"
-    }}>
-      <div onClick={onToggle} style={{
-        background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(34,197,94,0.1))",
-        padding: "16px 18px",
-        borderBottom: expanded ? "1px solid rgba(100,180,255,0.1)" : "none",
-        display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer"
-      }}>
+    <div style={{ background: "linear-gradient(135deg, rgba(16,30,50,0.9), rgba(10,20,40,0.95))", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 18, overflow: "hidden", marginBottom: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}>
+      <div onClick={onToggle} style={{ background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(34,197,94,0.1))", padding: "16px 18px", borderBottom: expanded ? "1px solid rgba(100,180,255,0.1)" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: "linear-gradient(135deg, #1e40af, #3b82f6)",
-            display: "flex", alignItems: "center", justifyContent: "center"
-          }}><Icon name="trend" size={17} /></div>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #1e40af, #3b82f6)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="trend" size={17} /></div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#e8f4fd" }}>Portfolio Intelligence</div>
             <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 2 }}>Real-time financial performance</div>
           </div>
         </div>
-        <button style={{
-          background: "rgba(100,180,255,0.12)", border: "none",
-          borderRadius: 9, color: "#60a5fa", padding: "7px 14px",
-          fontSize: 11, cursor: "pointer", fontWeight: 700
-        }}>{expanded ? "Hide ▲" : "Show ▼"}</button>
+        <button style={{ background: "rgba(100,180,255,0.12)", border: "none", borderRadius: 9, color: "#60a5fa", padding: "8px 14px", fontSize: 11, cursor: "pointer", fontWeight: 700, minHeight: 36 }}>{expanded ? "Hide ▲" : "Show ▼"}</button>
       </div>
       {expanded && (
         <div style={{ padding: "16px 18px" }}>
@@ -669,49 +607,22 @@ function ModernPortfolioCard({ fin, expanded, onToggle }) {
             <MetricRow icon="⚠️" label="Outstanding Principal" value={fc(fin.outstandingPrincipal)} color={fin.outstandingPrincipal > 0 ? "#f87171" : "#4ade80"} />
             <MetricRow icon="📈" label="Interest Earned" value={fc(fin.interestEarned)} color="#c4b5fd" />
           </div>
-          <div style={{
-            padding: "16px 18px",
-            background: "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(22,163,74,0.08))",
-            borderRadius: 14, border: "1px solid rgba(34,197,94,0.25)",
-            marginBottom: 12
-          }}>
-            <div style={{
-              fontSize: 10, color: "#4ade80", fontWeight: 700,
-              letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6
-            }}>💰 True Profit</div>
-            <div style={{
-              fontSize: 24, fontWeight: 900, color: "#22c55e",
-              fontFamily: "'Courier New',monospace", letterSpacing: -0.5
-            }}>{fc(fin.trueProfit)}</div>
+          <div style={{ padding: "16px 18px", background: "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(22,163,74,0.08))", borderRadius: 14, border: "1px solid rgba(34,197,94,0.25)", marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 6 }}>💰 True Profit</div>
+            <div style={{ fontSize: 24, fontWeight: 900, color: "#22c55e", fontFamily: "'Courier New',monospace", letterSpacing: -0.5 }}>{fc(fin.trueProfit)}</div>
           </div>
-          <div style={{
-            padding: "16px 18px",
-            background: `linear-gradient(135deg, ${rc}12, ${rc}05)`,
-            borderRadius: 14, border: `1px solid ${rc}30`
-          }}>
-            <div style={{
-              display: "flex", justifyContent: "space-between",
-              alignItems: "center", marginBottom: 10
-            }}>
+          <div style={{ padding: "16px 18px", background: `linear-gradient(135deg, ${rc}12, ${rc}05)`, borderRadius: 14, border: `1px solid ${rc}30` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: 10, color: rc, fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase" }}>Return on Investment</div>
-                <div style={{ fontSize: 9, color: "#5a7a90", marginTop: 3 }}>
-                  {fin.realROI >= 20 ? "🚀 Excellent" : fin.realROI >= 10 ? "📊 Healthy" : "⚠️ Below target"}
-                </div>
+                <div style={{ fontSize: 9, color: "#5a7a90", marginTop: 3 }}>{fin.realROI >= 20 ? "🚀 Excellent" : fin.realROI >= 10 ? "📊 Healthy" : "⚠️ Below target"}</div>
               </div>
-              <div style={{
-                background: `${rc}25`, borderRadius: 10,
-                padding: "6px 14px", border: `1px solid ${rc}40`
-              }}>
+              <div style={{ background: `${rc}25`, borderRadius: 10, padding: "6px 14px", border: `1px solid ${rc}40` }}>
                 <span style={{ fontSize: 20, fontWeight: 900, color: rc, fontFamily: "'Courier New',monospace" }}>{fin.realROI.toFixed(2)}%</span>
               </div>
             </div>
             <div style={{ height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 6, overflow: "hidden" }}>
-              <div style={{
-                height: "100%", width: `${Math.min(Math.max(fin.realROI, 0), 100)}%`,
-                background: `linear-gradient(90deg, ${rc}, ${rc}cc)`,
-                borderRadius: 6, transition: "width 0.6s ease-out"
-              }} />
+              <div style={{ height: "100%", width: `${Math.min(Math.max(fin.realROI, 0), 100)}%`, background: `linear-gradient(90deg, ${rc}, ${rc}cc)`, borderRadius: 6, transition: "width 0.6s ease-out" }} />
             </div>
           </div>
         </div>
@@ -720,60 +631,29 @@ function ModernPortfolioCard({ fin, expanded, onToggle }) {
   );
 }
 
-// ─── NEW: DEFAULTERS SECTION ────────────────────────────────────────────────
 function DefaultersSection({ clients, monthKey, onSelectClient }) {
   const [expanded, setExpanded] = useState(false);
   const defaulters = useMemo(() => computeDefaultingClientsReport(clients, monthKey), [clients, monthKey]);
   if (defaulters.length === 0) return null;
   const totalOwed = defaulters.reduce((s, d) => s + d.totalOwed, 0);
-
   return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(220,38,38,0.04))",
-      border: "1px solid rgba(239,68,68,0.25)",
-      borderRadius: 18, padding: 18, marginBottom: 20
-    }}>
-      <div onClick={() => setExpanded(!expanded)} style={{
-        display: "flex", justifyContent: "space-between",
-        alignItems: "center", cursor: "pointer"
-      }}>
+    <div style={{ background: "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(220,38,38,0.04))", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 18, padding: 18, marginBottom: 20 }}>
+      <div onClick={() => setExpanded(!expanded)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: "linear-gradient(135deg, #7f1d1d, #dc2626)",
-            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16
-          }}>⚠️</div>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #7f1d1d, #dc2626)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⚠️</div>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "#f87171" }}>
-              {defaulters.length} Defaulting Client{defaulters.length !== 1 ? "s" : ""}
-            </div>
-            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 2 }}>
-              Total owed: <span style={{ fontWeight: 800, color: "#ef4444", fontFamily: "'Courier New',monospace" }}>{fc(totalOwed)}</span>
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#f87171" }}>{defaulters.length} Defaulting Client{defaulters.length !== 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 2 }}>Total owed: <span style={{ fontWeight: 800, color: "#ef4444", fontFamily: "'Courier New',monospace" }}>{fc(totalOwed)}</span></div>
           </div>
         </div>
-        <button style={{
-          background: "rgba(239,68,68,0.15)", border: "none",
-          borderRadius: 9, color: "#f87171", padding: "7px 12px",
-          fontSize: 11, cursor: "pointer", fontWeight: 700
-        }}>{expanded ? "▲" : "▼"}</button>
+        <button style={{ background: "rgba(239,68,68,0.15)", border: "none", borderRadius: 9, color: "#f87171", padding: "8px 12px", fontSize: 11, cursor: "pointer", fontWeight: 700, minHeight: 36 }}>{expanded ? "▲" : "▼"}</button>
       </div>
       {expanded && (
         <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 8 }}>
           {defaulters.map(d => (
-            <div key={d.clientId} onClick={() => onSelectClient(d.clientId)} style={{
-              background: "rgba(0,0,0,0.25)",
-              border: "1px solid rgba(239,68,68,0.15)",
-              borderRadius: 12, padding: "12px 14px", cursor: "pointer",
-              display: "flex", justifyContent: "space-between", alignItems: "center"
-            }}>
+            <div key={d.clientId} onClick={() => onSelectClient(d.clientId)} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(239,68,68,0.15)", borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{
-                  width: 34, height: 34, borderRadius: 9,
-                  background: "linear-gradient(135deg, #7f1d1d, #dc2626)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontWeight: 800, color: "#fff", fontSize: 13
-                }}>{d.clientName.charAt(0)}</div>
+                <div style={{ width: 34, height: 34, borderRadius: 9, background: "linear-gradient(135deg, #7f1d1d, #dc2626)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: "#fff", fontSize: 13 }}>{d.clientName.charAt(0)}</div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: "#e8f4fd" }}>{d.clientName}</div>
                   <div style={{ fontSize: 10, color: "#7a3a3a" }}>{d.phone} · {d.daysOverdue}d overdue</div>
@@ -787,16 +667,6 @@ function DefaultersSection({ clients, monthKey, onSelectClient }) {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function SC({ label, value, accent, sub }) {
-  return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 14, padding: "16px 18px", borderTop: `2px solid ${accent}` }}>
-      <div style={{ fontSize: 10, color: "#4a6880", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 7 }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 800, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{value}</div>
-      {sub && <div style={{ fontSize: 10, color: "#3a5060", marginTop: 3 }}>{sub}</div>}
     </div>
   );
 }
@@ -842,9 +712,7 @@ function FP({ fin, isClient, expandFinancials, setExpandFinancials }) {
           <div style={{ fontSize: 13, fontWeight: 800, color: "#e8f4fd" }}>{isClient ? "Client Intelligence" : "Portfolio Intelligence"}</div>
         </div>
         {!isClient && setExpandFinancials && (
-          <button onClick={() => setExpandFinancials(!expandFinancials)} style={{ background: "rgba(100,180,255,0.08)", border: "none", borderRadius: 8, color: "#60a5fa", padding: "5px 12px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
-            {expandFinancials ? "Hide" : "Show"}
-          </button>
+          <button onClick={() => setExpandFinancials(!expandFinancials)} style={{ background: "rgba(100,180,255,0.08)", border: "none", borderRadius: 8, color: "#60a5fa", padding: "6px 12px", fontSize: 11, cursor: "pointer", fontWeight: 600, minHeight: 32 }}>{expandFinancials ? "Hide" : "Show"}</button>
         )}
       </div>
       {(isClient || expandFinancials) && (
@@ -887,7 +755,6 @@ function ShortfallBanner({ loan }) {
   );
 }
 
-// ─── INSTALLMENT ROW (with new Amount Remaining + Input) ─────────────────────
 function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const [showLog, setShowLog] = useState(false);
   const [quickAmt, setQuickAmt] = useState("");
@@ -897,17 +764,14 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   const isLate = s.paid && s.paidDate > s.dueDate;
   const hasOver = s.overpayment > 0;
   const hasLog = (s.paymentLog || []).length > 0;
-
   const amountRemaining = Math.max(0, s.payment - (s.paidAmount || 0));
   const totalRemaining = loan.schedule.filter(x => !x.paid).reduce((sum, x) => sum + (x.payment - (x.paidAmount || 0)), 0);
   const remainingDays = loan.schedule.filter(x => !x.paid).length;
-
   let border = "rgba(100,180,255,0.06)", bg = "rgba(255,255,255,0.01)";
   if (s.paid) { border = "rgba(34,197,94,0.15)"; bg = "rgba(34,197,94,0.04)"; }
   else if (isSF) { border = "rgba(239,68,68,0.35)"; bg = "rgba(239,68,68,0.08)"; }
   else if (isOD) { border = "rgba(239,68,68,0.2)"; bg = "rgba(239,68,68,0.05)"; }
   else if (isNext) { border = "rgba(96,165,250,0.2)"; bg = "rgba(96,165,250,0.03)"; }
-
   return (
     <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -925,7 +789,7 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
               {isSF && <Badge color="#f87171" bg="rgba(239,68,68,0.15)">SHORTFALL</Badge>}
               {hasOver && <Badge color="#a78bfa" bg="rgba(167,139,250,0.12)">OVERPAID</Badge>}
               {hasLog && (
-                <button onClick={() => setShowLog(!showLog)} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", borderRadius: 5, padding: "1px 6px", cursor: "pointer", fontSize: 9, fontWeight: 700 }}>
+                <button onClick={() => setShowLog(!showLog)} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", borderRadius: 5, padding: "2px 7px", cursor: "pointer", fontSize: 9, fontWeight: 700, minHeight: 24 }}>
                   {s.paymentLog.length} pay{s.paymentLog.length > 1 ? "s" : ""} {showLog ? "▲" : "▼"}
                 </button>
               )}
@@ -941,15 +805,13 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
             <div style={{ fontSize: 10, color: "#8ab4c8", fontFamily: "'Courier New',monospace" }}>{fc(s.balance)}</div>
           </div>
           {!s.paid && isActive && (
-            <button onClick={e => { e.stopPropagation(); onPay(loan, i); }} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "5px 10px", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 10 }}>Pay</button>
+            <button onClick={e => { e.stopPropagation(); onPay(loan, i); }} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "8px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 11, minHeight: 34 }}>Pay</button>
           )}
           {isAdmin && (
-            <button onClick={e => { e.stopPropagation(); onOverride(loan, i, s); }} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", borderRadius: 6, padding: "4px 7px", cursor: "pointer", fontSize: 9 }}>Edit</button>
+            <button onClick={e => { e.stopPropagation(); onOverride(loan, i, s); }} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", borderRadius: 7, padding: "6px 9px", cursor: "pointer", fontSize: 10, minHeight: 32 }}>Edit</button>
           )}
         </div>
       </div>
-
-      {/* NEW: Amount Remaining + Quick Collect */}
       {!s.paid && isActive && (
         <div style={{ marginTop: 10, padding: "10px 12px", background: "rgba(0,0,0,0.2)", borderRadius: 8, border: "1px solid rgba(100,180,255,0.08)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
@@ -971,18 +833,17 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
           <div style={{ display: "flex", alignItems: "flex-end", gap: 8, borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: 10 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 9, color: "#3a5a70", marginBottom: 4, letterSpacing: 0.8 }}>AMOUNT COLLECTED</div>
-              <input type="number" value={quickAmt} onChange={e => setQuickAmt(e.target.value)} placeholder="Enter amount..." style={{ ...IS, padding: "8px 12px", fontSize: 14, fontWeight: 700, fontFamily: "'Courier New',monospace", color: "#4ade80", borderColor: quickAmt ? "rgba(34,197,94,0.4)" : "rgba(100,180,255,0.15)", background: quickAmt ? "rgba(34,197,94,0.05)" : "rgba(100,180,255,0.05)" }} />
+              <input type="number" value={quickAmt} onChange={e => setQuickAmt(e.target.value)} placeholder="Enter amount..." style={{ ...IS, padding: "10px 12px", fontSize: 15, fontWeight: 700, fontFamily: "'Courier New',monospace", color: "#4ade80", borderColor: quickAmt ? "rgba(34,197,94,0.4)" : "rgba(100,180,255,0.15)", background: quickAmt ? "rgba(34,197,94,0.05)" : "rgba(100,180,255,0.05)" }} />
               {quickAmt && parseFloat(quickAmt) > 0 && (
                 <div style={{ fontSize: 9, color: parseFloat(quickAmt) >= amountRemaining ? "#4ade80" : "#f59e0b", marginTop: 4 }}>
                   {parseFloat(quickAmt) >= amountRemaining ? `✓ Covers day${parseFloat(quickAmt) > amountRemaining ? ` (+${fc(parseFloat(quickAmt) - amountRemaining)} extra)` : ""}` : `⚠ Short by ${fc(amountRemaining - parseFloat(quickAmt))}`}
                 </div>
               )}
             </div>
-            <button onClick={e => { e.stopPropagation(); if (quickAmt && parseFloat(quickAmt) > 0) { onPay(loan, i, parseFloat(quickAmt)); setQuickAmt(""); } }} style={{ background: quickAmt && parseFloat(quickAmt) > 0 ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)", border: "none", color: quickAmt && parseFloat(quickAmt) > 0 ? "#000" : "#3a5a70", padding: "10px 14px", borderRadius: 8, cursor: quickAmt ? "pointer" : "default", fontWeight: 800, fontSize: 12, whiteSpace: "nowrap" }}>✓ Collect</button>
+            <button onClick={e => { e.stopPropagation(); if (quickAmt && parseFloat(quickAmt) > 0) { onPay(loan, i, parseFloat(quickAmt)); setQuickAmt(""); } }} style={{ background: quickAmt && parseFloat(quickAmt) > 0 ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)", border: "none", color: quickAmt && parseFloat(quickAmt) > 0 ? "#000" : "#3a5a70", padding: "12px 16px", borderRadius: 8, cursor: quickAmt ? "pointer" : "default", fontWeight: 800, fontSize: 13, whiteSpace: "nowrap", minHeight: 44 }}>✓ Collect</button>
           </div>
         </div>
       )}
-
       {showLog && hasLog && (
         <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 10 }}>
           <div style={{ fontSize: 10, color: "#f59e0b", fontWeight: 700, marginBottom: 8 }}>📋 Payment Details</div>
@@ -1001,7 +862,6 @@ function InstRow({ s, i, loan, isActive, isAdmin, today, onPay, onOverride }) {
   );
 }
 
-// ─── LOAN CYCLE CARD ─────────────────────────────────────────────────────────
 function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructure }) {
   const [exp, setExp] = useState(num === total);
   const [schOpen, setSchOpen] = useState(num === total);
@@ -1009,7 +869,6 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
   const isAct = loan.status === "active";
   const pc = fin.completionRate >= 90 ? "#22c55e" : fin.completionRate >= 60 ? "#f59e0b" : "#ef4444";
   const stars = Math.round((fin.completionRate / 100) * 5);
-
   return (
     <div style={{ background: isAct ? "linear-gradient(135deg,rgba(34,197,94,0.04),rgba(59,130,246,0.03))" : "rgba(255,255,255,0.015)", border: `1px solid ${isAct ? "rgba(34,197,94,0.2)" : "rgba(96,165,250,0.12)"}`, borderRadius: 16, overflow: "hidden", marginBottom: 12 }}>
       <div onClick={() => setExp(!exp)} style={{ padding: "14px 16px", cursor: "pointer" }}>
@@ -1095,11 +954,11 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
             <div style={{ fontSize: 22, fontWeight: 900, color: pc, fontFamily: "'Courier New',monospace" }}>{fin.completionRate.toFixed(0)}%</div>
           </div>
           {isAdmin && isAct && (
-            <button onClick={() => onRestructure(loan)} style={{ width: "100%", background: "rgba(192,132,252,0.1)", border: "1px solid rgba(192,132,252,0.25)", color: "#c084fc", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 10 }}>
+            <button onClick={() => onRestructure(loan)} style={{ width: "100%", background: "rgba(192,132,252,0.1)", border: "1px solid rgba(192,132,252,0.25)", color: "#c084fc", padding: "11px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 10, minHeight: 44 }}>
               <Icon name="restructure" size={13} />Restructure Loan
             </button>
           )}
-          <button onClick={() => setSchOpen(!schOpen)} style={{ width: "100%", background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "9px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: schOpen ? 10 : 0 }}>
+          <button onClick={() => setSchOpen(!schOpen)} style={{ width: "100%", background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "11px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: schOpen ? 10 : 0, minHeight: 44 }}>
             <Icon name="calendar" size={13} />{schOpen ? "Hide" : "View"} Schedule
           </button>
           {schOpen && (
@@ -1115,19 +974,16 @@ function LCC({ loan, num, total, isAdmin, onPay, onOverride, today, onRestructur
   );
 }
 
-// ─── LOGIN ───────────────────────────────────────────────────────────────────
 function LoginScreen({ users, onLogin }) {
   const [u, setU] = useState("");
   const [p, setP] = useState("");
   const [err, setErr] = useState("");
   const [show, setShow] = useState(false);
-
   const go = () => {
     const f = users.find(x => x.username === u.trim() && x.password === p.trim() && x.active);
     if (f) { setErr(""); onLogin(f); }
     else setErr("Invalid credentials.");
   };
-
   return (
     <div style={{ minHeight: "100vh", background: "#060f1a", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 380 }}>
@@ -1148,18 +1004,17 @@ function LoginScreen({ users, onLogin }) {
           </Field>
           <Field label="Password">
             <div style={{ position: "relative" }}>
-              <input type={show ? "text" : "password"} style={{ ...IS, paddingRight: 40 }} value={p} onChange={e => setP(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} placeholder="Password" />
-              <button onClick={() => setShow(s => !s)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#3a5a70", cursor: "pointer" }}>{show ? "🙈" : "👁️"}</button>
+              <input type={show ? "text" : "password"} style={{ ...IS, paddingRight: 44 }} value={p} onChange={e => setP(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} placeholder="Password" />
+              <button onClick={() => setShow(s => !s)} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#3a5a70", cursor: "pointer", width: 36, height: 36, fontSize: 16 }}>{show ? "🙈" : "👁️"}</button>
             </div>
           </Field>
           {err && <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#f87171", marginBottom: 14 }}>{err}</div>}
-          <button onClick={go} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "13px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 15 }}>Sign In →</button>
+          <button onClick={go} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 15, minHeight: 48 }}>Sign In →</button>
         </div>
       </div>
     </div>
   );
-          }
-// ─── STAFF PANEL ─────────────────────────────────────────────────────────────
+    }
 function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, onApproveLoan, onRejectLoan, showToast }) {
   const [showAdd, setShowAdd] = useState(false);
   const [ns, setNs] = useState({ name: "", username: "", password: "", role: "loan_officer" });
@@ -1218,10 +1073,10 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
           <p style={{ margin: "4px 0 0", color: "#3a5a70", fontSize: 13 }}>{users.filter(u => u.role !== "admin").length} members</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setShowStaffReport(true)} style={{ background: "rgba(167,139,250,0.12)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa", padding: "9px 14px", borderRadius: 11, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setShowStaffReport(true)} style={{ background: "rgba(167,139,250,0.12)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa", padding: "10px 14px", borderRadius: 11, cursor: "pointer", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 6, minHeight: 40 }}>
             <Icon name="chart" size={13} />Reports
           </button>
-          <button onClick={() => setShowAdd(true)} style={{ background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "9px 16px", borderRadius: 11, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setShowAdd(true)} style={{ background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "10px 16px", borderRadius: 11, cursor: "pointer", fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6, minHeight: 40 }}>
             <Icon name="plus" size={13} />Add
           </button>
         </div>
@@ -1248,8 +1103,8 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => onApproveLoan(pl)} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "9px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>✓ Approve</button>
-                  <button onClick={() => onRejectLoan(pl.id)} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "9px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>✕ Reject</button>
+                  <button onClick={() => onApproveLoan(pl)} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "11px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, minHeight: 44 }}>✓ Approve</button>
+                  <button onClick={() => onRejectLoan(pl.id)} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "11px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, minHeight: 44 }}>✕ Reject</button>
                 </div>
               </div>
             );
@@ -1274,13 +1129,13 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setResetPwd(o)} title="Reset Password" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button onClick={() => setResetPwd(o)} title="Reset Password" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Icon name="key" size={13} />
                 </button>
-                <button onClick={() => setEditS(o)} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button onClick={() => setEditS(o)} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Icon name="edit" size={13} />
                 </button>
-                <button onClick={() => onUpdateUsers(users.map(u => u.id === o.id ? { ...u, active: !u.active } : u))} style={{ background: o.active ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", border: `1px solid ${o.active ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)"}`, color: o.active ? "#f87171" : "#4ade80", width: 30, height: 30, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button onClick={() => onUpdateUsers(users.map(u => u.id === o.id ? { ...u, active: !u.active } : u))} style={{ background: o.active ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", border: `1px solid ${o.active ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)"}`, color: o.active ? "#f87171" : "#4ade80", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   {o.active ? <Icon name="lock" size={13} /> : <Icon name="unlock" size={13} />}
                 </button>
               </div>
@@ -1302,7 +1157,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
           <Field label="Name *"><input style={IS} value={ns.name} onChange={e => setNs(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
           <Field label="Username *"><input style={IS} value={ns.username} onChange={e => setNs(p => ({ ...p, username: e.target.value.toLowerCase().replace(/\s/g, "") }))} /></Field>
           <Field label="Password *"><input type="password" style={IS} value={ns.password} onChange={e => setNs(p => ({ ...p, password: e.target.value }))} placeholder="Min 4 chars" /></Field>
-          <button onClick={handleAdd} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14 }}>✓ Create</button>
+          <button onClick={handleAdd} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, minHeight: 48 }}>✓ Create</button>
         </Modal>
       )}
 
@@ -1315,14 +1170,14 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
             onUpdateUsers(users.map(u => u.id === editS.id ? { ...u, name: editS.name, username: editS.username } : u));
             setEditS(null);
             showToast("Updated!");
-          }} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Save</button>
+          }} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Save</button>
         </Modal>
       )}
 
       {resetPwd && (
         <Modal title="🔑 Reset Password" onClose={() => { setResetPwd(null); setNewPwd(""); }}>
           <Field label="New Password *"><input type="password" style={IS} value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="Min 4 characters" autoFocus /></Field>
-          <button onClick={handleReset} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Reset</button>
+          <button onClick={handleReset} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Reset</button>
         </Modal>
       )}
 
@@ -1408,6 +1263,12 @@ export default function App() {
   const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem("creda_last_backup") || null);
   const [dismissedBackup, setDismissedBackup] = useState(false);
 
+  // ── AUTO-TIMEOUT (10 minutes) ──────────────────────────────────────────
+  const [sessionTimeout, setSessionTimeout] = useState(() => parseInt(localStorage.getItem("creda_timeout") || "10"));
+  const [lastActivity, setLastActivity] = useState(Date.now());
+  const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
+  const [showTimeoutSettings, setShowTimeoutSettings] = useState(false);
+
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type });
     setTimeout(() => setToast({ msg: "", type: "success" }), 3000);
@@ -1415,6 +1276,32 @@ export default function App() {
 
   const isAdmin = currentUser?.role === "admin";
   const today = new Date();
+
+  // Auto-timeout tracking
+  useEffect(() => {
+    if (!currentUser) return;
+    const resetActivity = () => {
+      setLastActivity(Date.now());
+      if (showTimeoutWarning) setShowTimeoutWarning(false);
+    };
+    const events = ["mousedown", "keydown", "touchstart", "scroll", "click"];
+    events.forEach(e => window.addEventListener(e, resetActivity, { passive: true }));
+    const checker = setInterval(() => {
+      const idle = (Date.now() - lastActivity) / 60000;
+      const warnAt = sessionTimeout - 2;
+      if (idle >= sessionTimeout) {
+        setCurrentUser(null);
+        setShowTimeoutWarning(false);
+        showToast("Logged out due to inactivity", "error");
+      } else if (idle >= warnAt && !showTimeoutWarning) {
+        setShowTimeoutWarning(true);
+      }
+    }, 30000);
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetActivity));
+      clearInterval(checker);
+    };
+  }, [currentUser, lastActivity, sessionTimeout, showTimeoutWarning, showToast]);
 
   useEffect(() => {
     const unsubs = [
@@ -1474,7 +1361,7 @@ export default function App() {
     const map = {};
     src.forEach(c => {
       (c.loans || []).forEach(l => {
-        if (l.status === "completed") return; // Hide completed loans
+        if (l.status === "completed") return;
         (l.schedule || []).forEach(s => {
           const due = s.dueDate;
           if (!due) return;
@@ -1545,7 +1432,7 @@ export default function App() {
     const calc = calcLoanSchedule(p, r, d, newLoan.startDate, newLoan.excludeWeekends);
     const loan = { id: generateId("LN"), principal: p, interestRate: r, days: d, startDate: newLoan.startDate, ...calc, status: "active", issuedAt: new Date().toISOString(), excludeWeekends: newLoan.excludeWeekends, issuedBy: currentUser?.id, issuedByName: currentUser?.name };
     saveClients(clients.map(c => c.id === selectedClientId ? { ...c, loans: [...(c.loans || []), loan] } : c));
-    setNewLoan({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
+    setNewLoan({ principal: "", interestRate: "15", days: "24", startDate: todayStr, excludeWeekends: true });
     setShowAddLoan(false);
     showToast("Loan issued!");
   };
@@ -1557,7 +1444,7 @@ export default function App() {
     const d = parseInt(newLoan.days);
     const calc = calcLoanSchedule(p, r, d, newLoan.startDate, newLoan.excludeWeekends);
     savePending([...pendingLoans, { id: generateId("PL"), clientId: selectedClientId, requestedBy: currentUser?.id, requestedByName: currentUser?.name, requestedAt: new Date().toISOString(), loanData: { principal: p, interestRate: r, days: d, startDate: newLoan.startDate, ...calc, excludeWeekends: newLoan.excludeWeekends } }]);
-    setNewLoan({ principal: "", interestRate: "15", days: "30", startDate: todayStr, excludeWeekends: true });
+    setNewLoan({ principal: "", interestRate: "15", days: "24", startDate: todayStr, excludeWeekends: true });
     setShowAddLoan(false);
     showToast("Request submitted!");
   };
@@ -1590,7 +1477,6 @@ export default function App() {
     showToast("Payment recorded!");
   };
 
-  // Direct payment (from InstRow quick collect)
   const handleDirectPay = (clientId, loanId, scheduleIdx, amount) => {
     saveClients(clients.map(c => {
       if (c.id !== clientId) return c;
@@ -1697,7 +1583,7 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "10.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "11.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1727,7 +1613,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <LoginScreen users={users} onLogin={u => { setCurrentUser(u); }} />;
+    return <LoginScreen users={users} onLogin={u => { setCurrentUser(u); setLastActivity(Date.now()); }} />;
   }
 
   const currentClient = selectedClient;
@@ -1735,27 +1621,25 @@ export default function App() {
   const clientFin = currentClient ? computeClientFinancials(currentClient) : null;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#060f1a", paddingBottom: 80 }}>
+    <div style={{ minHeight: "100vh", background: "#060f1a", paddingBottom: "calc(80px + env(safe-area-inset-bottom))", WebkitTapHighlightColor: "transparent", WebkitTextSizeAdjust: "100%", touchAction: "manipulation" }}>
       <Toast msg={toast.msg} type={toast.type} />
 
-      {/* HEADER */}
       <header style={{ position: "sticky", top: 0, background: "rgba(6,15,26,0.95)", backdropFilter: "blur(12px)", borderBottom: "1px solid rgba(100,180,255,0.08)", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 50 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,#0a5c36,#0d7a48)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#0a5c36,#0d7a48)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <span style={{ color: "#fff", fontWeight: 900, fontSize: 15 }}>C</span>
           </div>
           <div style={{ fontSize: 15, fontWeight: 800, color: "#e8f4fd", letterSpacing: 1, fontFamily: "serif" }}>CREDA</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <div style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", color: sync === "synced" ? "#4ade80" : "#f59e0b", fontSize: 16 }}>{sync === "synced" ? "☁" : "⟳"}</div>
-          <button onClick={() => setShowProfile(true)} style={{ background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.2)", color: "#60a5fa", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="user" size={14} /></button>
-          <button onClick={exportData} style={{ background: "rgba(107,122,141,0.1)", border: "1px solid rgba(107,122,141,0.2)", color: "#8ab4c8", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="dashboard" size={14} /></button>
-          <button onClick={() => setCurrentUser(null)} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", width: 34, height: 34, borderRadius: 9, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="logout" size={14} /></button>
+          <div style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", color: sync === "synced" ? "#4ade80" : "#f59e0b", fontSize: 16 }}>{sync === "synced" ? "☁" : "⟳"}</div>
+          <button onClick={() => setShowProfile(true)} style={{ background: "rgba(96,165,250,0.1)", border: "1px solid rgba(96,165,250,0.2)", color: "#60a5fa", width: 40, height: 40, borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="user" size={15} /></button>
+          <button onClick={exportData} style={{ background: "rgba(107,122,141,0.1)", border: "1px solid rgba(107,122,141,0.2)", color: "#8ab4c8", width: 40, height: 40, borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="dashboard" size={15} /></button>
+          <button onClick={() => setCurrentUser(null)} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", width: 40, height: 40, borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="logout" size={15} /></button>
         </div>
       </header>
 
       <main style={{ padding: "16px" }}>
-        {/* ── ADMIN ACCOUNTANT MODE ── */}
         {isAdmin && adminMode === "accountant" && (
           <div>
             <div style={{ background: "linear-gradient(135deg, rgba(167,139,250,0.15), rgba(139,92,246,0.08))", borderRadius: 20, padding: "20px 22px", marginBottom: 20, border: "1px solid rgba(167,139,250,0.2)" }}>
@@ -1764,10 +1648,9 @@ export default function App() {
                   <div style={{ fontSize: 11, color: "#c4b5fd", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 4 }}>Financial Ops</div>
                   <h1 style={{ margin: 0, fontSize: 24, fontWeight: 900, color: "#fff" }}>Accountant</h1>
                 </div>
-                <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>👑 Admin</button>
+                <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "8px 14px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, minHeight: 40 }}>👑 Admin</button>
               </div>
             </div>
-
             {(() => {
               const todayData = dailyCollectionData.find(d => d.date === todayStr) || { expected: 0, collected: 0, installments: [] };
               const gap = Math.max(0, todayData.expected - todayData.collected);
@@ -1787,7 +1670,7 @@ export default function App() {
                   </div>
                   <div style={{ padding: "16px 0" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontSize: 10, color: "#5a7a90", fontWeight: 600 }}>Collection Progress</span>
+                      <span style={{ fontSize: 10, color: "#5a7a90", fontWeight: 600 }}>Progress</span>
                       <span style={{ fontSize: 12, color: rate >= 80 ? "#4ade80" : rate >= 50 ? "#f59e0b" : "#f87171", fontWeight: 800, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}%</span>
                     </div>
                     <div style={{ height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 6, overflow: "hidden" }}>
@@ -1811,13 +1694,11 @@ export default function App() {
                 </div>
               );
             })()}
-
             <div style={{ display: "flex", gap: 6, marginBottom: 16, padding: 4, background: "rgba(0,0,0,0.25)", borderRadius: 12 }}>
               {["today", "week", "month", "all"].map(f => (
-                <button key={f} onClick={() => setAcctDateFilter(f)} style={{ flex: 1, background: acctDateFilter === f ? "linear-gradient(135deg,#16a34a,#22c55e)" : "transparent", border: "none", color: acctDateFilter === f ? "#000" : "#5a7a90", padding: "9px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, textTransform: "capitalize" }}>{f}</button>
+                <button key={f} onClick={() => setAcctDateFilter(f)} style={{ flex: 1, background: acctDateFilter === f ? "linear-gradient(135deg,#16a34a,#22c55e)" : "transparent", border: "none", color: acctDateFilter === f ? "#000" : "#5a7a90", padding: "11px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, textTransform: "capitalize", minHeight: 42 }}>{f}</button>
               ))}
             </div>
-
             {dailyCollectionData.filter(d => {
               if (acctDateFilter === "today") return d.date === todayStr;
               if (acctDateFilter === "week") { const diff = (new Date() - new Date(d.date)) / (86400000); return diff >= 0 && diff <= 7; }
@@ -1877,7 +1758,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── DASHBOARD ── */}
         {(!isAdmin || adminMode === "admin") && view === "dashboard" && (
           <div>
             <div style={{ background: "linear-gradient(135deg, rgba(59,130,246,0.15), rgba(34,197,94,0.08), rgba(167,139,250,0.1))", borderRadius: 20, padding: "20px 22px", marginBottom: 20, border: "1px solid rgba(100,180,255,0.15)", position: "relative", overflow: "hidden" }}>
@@ -1891,12 +1771,11 @@ export default function App() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
                   <RB role={currentUser.role} />
                   {isAdmin && (
-                    <button onClick={() => setAdminMode("accountant")} style={{ background: "linear-gradient(135deg, rgba(167,139,250,0.2), rgba(139,92,246,0.15))", border: "1px solid rgba(167,139,250,0.3)", color: "#c4b5fd", padding: "7px 12px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>📊 Finance</button>
+                    <button onClick={() => setAdminMode("accountant")} style={{ background: "linear-gradient(135deg, rgba(167,139,250,0.2), rgba(139,92,246,0.15))", border: "1px solid rgba(167,139,250,0.3)", color: "#c4b5fd", padding: "9px 14px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 11, minHeight: 38 }}>📊 Finance</button>
                   )}
                 </div>
               </div>
             </div>
-
             {showBackupReminder && isAdmin && (
               <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 12, padding: "10px 14px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1907,12 +1786,11 @@ export default function App() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={exportData} style={{ background: "#f59e0b", border: "none", color: "#000", padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>Backup</button>
-                  <button onClick={() => setDismissedBackup(true)} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#5a7a90", padding: "6px 10px", borderRadius: 8, cursor: "pointer" }}>×</button>
+                  <button onClick={exportData} style={{ background: "#f59e0b", border: "none", color: "#000", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, minHeight: 36 }}>Backup</button>
+                  <button onClick={() => setDismissedBackup(true)} style={{ background: "rgba(255,255,255,0.06)", border: "none", color: "#5a7a90", padding: "8px 12px", borderRadius: 8, cursor: "pointer", minHeight: 36 }}>×</button>
                 </div>
               </div>
             )}
-
             {isAdmin && pendingLoans.length > 0 && (
               <div onClick={() => setView("staff")} style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.12), rgba(234,88,12,0.08))", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1924,7 +1802,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
             {!isAdmin && todayRoute.length > 0 && (
               <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.08),rgba(34,197,94,0.06))", border: "1px solid rgba(96,165,250,0.2)", borderRadius: 16, padding: 16, marginBottom: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -1950,18 +1827,14 @@ export default function App() {
                 ))}
               </div>
             )}
-
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
               <ModernStatCard label={isAdmin ? "Disbursed" : "This Month"} value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
               <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
               <ModernStatCard label="Outstanding" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > stats.totalDisbursed * 0.5} />
               <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
             </div>
-
             {isAdmin && <ModernPortfolioCard fin={globalFin} expanded={expandFinancials} onToggle={() => setExpandFinancials(!expandFinancials)} />}
-
             {isAdmin && <DefaultersSection clients={clients} monthKey={null} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
-
             {isAdmin && (
               <div style={{ background: "linear-gradient(135deg,rgba(16,30,50,0.7),rgba(10,20,40,0.5))", border: "1px solid rgba(100,180,255,0.1)", borderRadius: 18, padding: 18, marginBottom: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1972,7 +1845,7 @@ export default function App() {
                       <p style={{ margin: "2px 0 0", fontSize: 10, color: "#5a7a90" }}>Loan trends</p>
                     </div>
                   </div>
-                  <button onClick={() => setExpandMonthlyHistory(!expandMonthlyHistory)} style={{ background: "rgba(147,197,253,0.12)", border: "none", borderRadius: 9, color: "#93c5fd", padding: "7px 14px", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>{expandMonthlyHistory ? "Hide" : "View"} {expandMonthlyHistory ? "▲" : "▼"}</button>
+                  <button onClick={() => setExpandMonthlyHistory(!expandMonthlyHistory)} style={{ background: "rgba(147,197,253,0.12)", border: "none", borderRadius: 9, color: "#93c5fd", padding: "9px 14px", fontSize: 11, cursor: "pointer", fontWeight: 700, minHeight: 38 }}>{expandMonthlyHistory ? "Hide ▲" : "View ▼"}</button>
                 </div>
                 {expandMonthlyHistory && (
                   <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2006,7 +1879,6 @@ export default function App() {
                         </div>
                       );
                     })}
-                    {/* DEFAULTERS UNDER MONTHLY REPORT */}
                     {computeDefaultingClientsReport(clients, curMonthKey).length > 0 && (
                       <div style={{ marginTop: 6, padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12 }}>
                         <div style={{ fontSize: 12, fontWeight: 700, color: "#f87171", marginBottom: 10 }}>⚠️ Defaulting Clients — {fm(curMonthKey)}</div>
@@ -2028,10 +1900,9 @@ export default function App() {
                 )}
               </div>
             )}
-
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
               <div style={{ fontSize: 15, fontWeight: 800, color: "#e8f4fd" }}>Recent Activity</div>
-              <button onClick={() => setView("clients")} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", fontSize: 11, cursor: "pointer", padding: "6px 12px", borderRadius: 9, fontWeight: 700 }}>View All →</button>
+              <button onClick={() => setView("clients")} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", fontSize: 11, cursor: "pointer", padding: "8px 14px", borderRadius: 9, fontWeight: 700, minHeight: 36 }}>View All →</button>
             </div>
             {visibleClients.slice(0, 5).map(c => {
               const { active, overdue, balance } = getClientSummary(c);
@@ -2049,12 +1920,10 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    {active ? (
-                      <>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div>
-                        <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>Balance</div>
-                      </>
-                    ) : <div style={{ fontSize: 11, color: "#3a5a70" }}>No active loan</div>}
+                    {active ? (<>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace" }}>{fc(balance)}</div>
+                      <div style={{ fontSize: 9, color: "#3a5a70", marginTop: 2 }}>Balance</div>
+                    </>) : <div style={{ fontSize: 11, color: "#3a5a70" }}>No active loan</div>}
                   </div>
                 </div>
               );
@@ -2062,7 +1931,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ── CLIENTS LIST ── */}
         {(!isAdmin || adminMode === "admin") && view === "clients" && (
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -2070,15 +1938,15 @@ export default function App() {
                 <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8f4fd" }}>Clients</h1>
                 <p style={{ margin: "4px 0 0", color: "#3a5a70", fontSize: 13 }}>{filteredClients.length} of {visibleClients.length}</p>
               </div>
-              <button onClick={() => setShowAddClient(true)} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "10px 16px", borderRadius: 11, cursor: "pointer", fontWeight: 800, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Icon name="plus" size={14} />Add</button>
+              <button onClick={() => setShowAddClient(true)} style={{ background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px 18px", borderRadius: 11, cursor: "pointer", fontWeight: 800, fontSize: 13, display: "flex", alignItems: "center", gap: 6, minHeight: 44 }}><Icon name="plus" size={14} />Add</button>
             </div>
             <div style={{ position: "relative", marginBottom: 12 }}>
-              <input placeholder="Search name or phone..." value={clientSearch} onChange={e => setClientSearch(e.target.value)} style={{ ...IS, paddingLeft: 38 }} />
+              <input placeholder="Search name or phone..." value={clientSearch} onChange={e => setClientSearch(e.target.value)} style={{ ...IS, paddingLeft: 40 }} />
               <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#3a5a70" }}><Icon name="search" size={15} /></div>
             </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
               {[["all", "All"], ["active", "Active"], ["completed", "Done"], ["none", "No Loan"], ["red", "🔴 High"], ["amber", "🟡 Watch"]].map(([k, v]) => (
-                <button key={k} onClick={() => setClientFilter(k)} style={{ background: clientFilter === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "rgba(255,255,255,0.04)", border: "none", color: clientFilter === k ? "#fff" : "#5a7a90", padding: "7px 12px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, whiteSpace: "nowrap" }}>{v}</button>
+                <button key={k} onClick={() => setClientFilter(k)} style={{ background: clientFilter === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "rgba(255,255,255,0.04)", border: "none", color: clientFilter === k ? "#fff" : "#5a7a90", padding: "9px 14px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, whiteSpace: "nowrap", minHeight: 36 }}>{v}</button>
               ))}
             </div>
             {filteredClients.length === 0 ? (
@@ -2107,11 +1975,9 @@ export default function App() {
           </div>
         )}
 
-        {/* ── CLIENT DETAIL ── */}
         {(!isAdmin || adminMode === "admin") && view === "detail" && currentClient && (
           <div>
-            <button onClick={() => setView("clients")} style={{ background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "7px 12px", borderRadius: 9, cursor: "pointer", marginBottom: 14, display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}><Icon name="back" size={13} />Back</button>
-
+            <button onClick={() => setView("clients")} style={{ background: "rgba(100,180,255,0.06)", border: "1px solid rgba(100,180,255,0.12)", color: "#60a5fa", padding: "9px 14px", borderRadius: 9, cursor: "pointer", marginBottom: 14, display: "flex", alignItems: "center", gap: 5, fontSize: 12, minHeight: 40 }}><Icon name="back" size={13} />Back</button>
             <div style={{ background: "linear-gradient(135deg,rgba(59,130,246,0.1),rgba(34,197,94,0.06))", border: "1px solid rgba(100,180,255,0.15)", borderRadius: 18, padding: 18, marginBottom: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                 <div style={{ width: 56, height: 56, borderRadius: 14, background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 900, color: "#fff" }}>{currentClient.name.charAt(0).toUpperCase()}</div>
@@ -2136,24 +2002,20 @@ export default function App() {
                 </div>
               )}
               <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
-                <button onClick={() => setShowEditClient(currentClient)} style={{ flex: 1, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Edit</button>
-                {isAdmin && <button onClick={() => setShowAssignClient(currentClient)} style={{ flex: 1, background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.2)", color: "#a78bfa", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Reassign</button>}
-                {isAdmin && <button onClick={() => setConfirmDelete(currentClient)} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "8px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>Delete</button>}
+                <button onClick={() => setShowEditClient(currentClient)} style={{ flex: 1, background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", padding: "10px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700, minHeight: 40 }}>Edit</button>
+                {isAdmin && <button onClick={() => setShowAssignClient(currentClient)} style={{ flex: 1, background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.2)", color: "#a78bfa", padding: "10px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700, minHeight: 40 }}>Reassign</button>}
+                {isAdmin && <button onClick={() => setConfirmDelete(currentClient)} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "10px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700, minHeight: 40 }}>Delete</button>}
               </div>
             </div>
-
             {isAdmin && <FP fin={{ ...clientFin, totalCapital: clientFin.capital }} isClient />}
-
             {!activeLoan && (
-              <button onClick={() => setShowAddLoan(true)} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 14 }}>+ {isAdmin ? "Issue Loan" : "Request Loan"}</button>
+              <button onClick={() => setShowAddLoan(true)} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 14, minHeight: 48 }}>+ {isAdmin ? "Issue Loan" : "Request Loan"}</button>
             )}
-
             <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "rgba(0,0,0,0.25)", borderRadius: 10 }}>
               {[["loans", `Loans (${currentClient.loans?.length || 0})`], ["savings", "Savings"], ["history", "History"]].map(([k, v]) => (
-                <button key={k} onClick={() => setActiveTab(k)} style={{ flex: 1, background: activeTab === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "transparent", border: "none", color: activeTab === k ? "#fff" : "#5a7a90", padding: "8px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11 }}>{v}</button>
+                <button key={k} onClick={() => setActiveTab(k)} style={{ flex: 1, background: activeTab === k ? "linear-gradient(135deg,#3b82f6,#2563eb)" : "transparent", border: "none", color: activeTab === k ? "#fff" : "#5a7a90", padding: "10px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, minHeight: 40 }}>{v}</button>
               ))}
             </div>
-
             {activeTab === "loans" && (
               <div>
                 {(!currentClient.loans || currentClient.loans.length === 0) ? (
@@ -2173,7 +2035,6 @@ export default function App() {
                 ))}
               </div>
             )}
-
             {activeTab === "savings" && (
               <div>
                 <div style={{ background: "linear-gradient(135deg,rgba(167,139,250,0.1),rgba(139,92,246,0.06))", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 14, padding: 18, marginBottom: 12, textAlign: "center" }}>
@@ -2181,8 +2042,8 @@ export default function App() {
                   <div style={{ fontSize: 28, fontWeight: 900, color: "#a78bfa", fontFamily: "'Courier New',monospace", marginTop: 6 }}>{fc(currentClient.savingsBalance || 0)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-                  <button onClick={() => setShowSavingsTx({ type: "deposit", client: currentClient })} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📥 Deposit</button>
-                  <button onClick={() => setShowSavingsTx({ type: "withdraw", client: currentClient })} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>📤 Withdraw</button>
+                  <button onClick={() => setShowSavingsTx({ type: "deposit", client: currentClient })} style={{ flex: 1, background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, minHeight: 44 }}>📥 Deposit</button>
+                  <button onClick={() => setShowSavingsTx({ type: "withdraw", client: currentClient })} style={{ flex: 1, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, minHeight: 44 }}>📤 Withdraw</button>
                 </div>
                 {(currentClient.savingsLogs || []).map(log => (
                   <div key={log.id} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2198,7 +2059,6 @@ export default function App() {
                 ))}
               </div>
             )}
-
             {activeTab === "history" && (
               <div>
                 {getClientTransactions(currentClient).length === 0 ? (
@@ -2220,35 +2080,85 @@ export default function App() {
           </div>
         )}
 
-        {/* ── STAFF (Admin only) ── */}
         {isAdmin && adminMode === "admin" && view === "staff" && (
           <StaffPanel users={users} clients={clients} pendingLoans={pendingLoans} currentUser={currentUser} onUpdateUsers={saveUsers} onApproveLoan={handleApproveLoan} onRejectLoan={handleRejectLoan} showToast={showToast} />
         )}
       </main>
 
-      {/* BOTTOM NAV */}
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(6,15,26,0.95)", backdropFilter: "blur(12px)", borderTop: "1px solid rgba(100,180,255,0.1)", display: "flex", justifyContent: "space-around", padding: "8px 4px 12px", zIndex: 40 }}>
+      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "rgba(6,15,26,0.98)", backdropFilter: "blur(16px)", borderTop: "1px solid rgba(100,180,255,0.12)", display: "flex", justifyContent: "space-around", padding: "10px 4px calc(12px + env(safe-area-inset-bottom))", zIndex: 40, boxShadow: "0 -4px 20px rgba(0,0,0,0.4)" }}>
         {[["dashboard", "Overview", "dashboard"], ["clients", "Clients", "user"]].map(([v, l, i]) => (
-          <button key={v} onClick={() => { setView(v); if (isAdmin) setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === v && (adminMode === "admin" || !isAdmin) ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
-            <Icon name={i} size={18} />
-            <span style={{ fontSize: 9, fontWeight: 700 }}>{l}</span>
+          <button key={v} onClick={() => { setView(v); if (isAdmin) setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === v && (adminMode === "admin" || !isAdmin) ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 14px", minWidth: 60, minHeight: 48, borderRadius: 10 }}>
+            <Icon name={i} size={20} />
+            <span style={{ fontSize: 10, fontWeight: 700 }}>{l}</span>
           </button>
         ))}
         {isAdmin && (
-          <button onClick={() => setAdminMode("accountant")} style={{ background: "none", border: "none", color: adminMode === "accountant" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
-            <Icon name="account" size={18} />
-            <span style={{ fontSize: 9, fontWeight: 700 }}>Accounts</span>
+          <button onClick={() => setAdminMode("accountant")} style={{ background: "none", border: "none", color: adminMode === "accountant" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 14px", minWidth: 60, minHeight: 48, borderRadius: 10 }}>
+            <Icon name="account" size={20} />
+            <span style={{ fontSize: 10, fontWeight: 700 }}>Accounts</span>
           </button>
         )}
         {isAdmin && (
-          <button onClick={() => { setView("staff"); setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === "staff" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 8px" }}>
-            <Icon name="users" size={18} />
-            <span style={{ fontSize: 9, fontWeight: 700 }}>Staff</span>
+          <button onClick={() => { setView("staff"); setAdminMode("admin"); }} style={{ background: "none", border: "none", color: view === "staff" ? "#4ade80" : "#5a7a90", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "8px 14px", minWidth: 60, minHeight: 48, borderRadius: 10 }}>
+            <Icon name="users" size={20} />
+            <span style={{ fontSize: 10, fontWeight: 700 }}>Staff</span>
           </button>
         )}
       </nav>
 
-      {/* ── MODALS ── */}
+      {/* ── SESSION TIMEOUT WARNING ── */}
+      {showTimeoutWarning && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.95)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(10px)" }}>
+          <div style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.15), rgba(234,88,12,0.1))", border: "2px solid rgba(245,158,11,0.4)", borderRadius: 20, padding: 24, maxWidth: 380, width: "100%", textAlign: "center", boxShadow: "0 20px 60px rgba(245,158,11,0.3)" }}>
+            <div style={{ fontSize: 48, marginBottom: 14 }}>⏰</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#f59e0b", marginBottom: 8 }}>Session Expiring</div>
+            <div style={{ fontSize: 13, color: "#e8f4fd", marginBottom: 20, lineHeight: 1.5 }}>
+              You'll be logged out in 2 minutes due to inactivity.
+              <br /><br />
+              <span style={{ color: "#8ab4c8", fontSize: 11 }}>Tap anywhere or the button below to stay signed in.</span>
+            </div>
+            <button onClick={() => { setLastActivity(Date.now()); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 10, minHeight: 48 }}>
+              ✓ Stay Signed In
+            </button>
+            <button onClick={() => { setCurrentUser(null); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 700, fontSize: 13, minHeight: 44 }}>
+              Sign Out Now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── TIMEOUT SETTINGS ── */}
+      {showTimeoutSettings && (
+        <Modal title="⏰ Session Timeout" onClose={() => setShowTimeoutSettings(false)}>
+          <div style={{ padding: 14, background: "rgba(59,130,246,0.06)", borderRadius: 10, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: "#60a5fa", fontWeight: 700, marginBottom: 6 }}>🔐 Current Setting</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>
+              {sessionTimeout} minute{sessionTimeout !== 1 ? "s" : ""}
+            </div>
+            <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 6 }}>Users logged out after this idle period</div>
+          </div>
+          <div style={{ fontSize: 12, color: "#8ab4c8", marginBottom: 10, fontWeight: 600 }}>Choose Duration:</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+            {[5, 10, 15, 30, 60, 120].map(mins => (
+              <button key={mins} onClick={() => {
+                setSessionTimeout(mins);
+                localStorage.setItem("creda_timeout", mins.toString());
+                setLastActivity(Date.now());
+                showToast(`Timeout set to ${mins} minutes`);
+              }} style={{
+                background: sessionTimeout === mins ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)",
+                border: "none", color: sessionTimeout === mins ? "#000" : "#8ab4c8",
+                padding: "14px", borderRadius: 10, cursor: "pointer",
+                fontWeight: 800, fontSize: 13, minHeight: 48
+              }}>
+                {mins < 60 ? `${mins} min` : `${mins / 60} hr`}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setShowTimeoutSettings(false)} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>Done</button>
+        </Modal>
+      )}
+
       {showAddClient && (
         <Modal title="Register Client" onClose={() => setShowAddClient(false)}>
           <Field label="Name *"><input style={IS} value={newClient.name} onChange={e => setNewClient(p => ({ ...p, name: e.target.value }))} autoFocus /></Field>
@@ -2263,7 +2173,7 @@ export default function App() {
           <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
           <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
           <Field label="Guarantor Occupation"><input style={IS} value={newClient.guarantorOccupation} onChange={e => setNewClient(p => ({ ...p, guarantorOccupation: e.target.value }))} placeholder="e.g. Civil Servant, Business Owner" /></Field>
-          <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14 }}>✓ Register</button>
+          <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, minHeight: 48 }}>✓ Register</button>
         </Modal>
       )}
 
@@ -2281,7 +2191,7 @@ export default function App() {
           <Field label="Guarantor Phone"><input style={IS} value={showEditClient.guarantorPhone || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
           <Field label="Relationship"><input style={IS} value={showEditClient.guarantorRelationship || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorRelationship: e.target.value }))} /></Field>
           <Field label="Guarantor Occupation"><input style={IS} value={showEditClient.guarantorOccupation || ""} onChange={e => setShowEditClient(p => ({ ...p, guarantorOccupation: e.target.value }))} /></Field>
-          <button onClick={handleUpdateClient} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Save</button>
+          <button onClick={handleUpdateClient} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Save</button>
         </Modal>
       )}
 
@@ -2291,32 +2201,32 @@ export default function App() {
           <Field label="Interest Rate (%)"><input type="number" style={IS} value={newLoan.interestRate} onChange={e => setNewLoan(p => ({ ...p, interestRate: e.target.value }))} /></Field>
           <Field label="Days"><input type="number" style={IS} value={newLoan.days} onChange={e => setNewLoan(p => ({ ...p, days: e.target.value }))} /></Field>
           <Field label="Start Date"><input type="date" style={IS} value={newLoan.startDate} onChange={e => setNewLoan(p => ({ ...p, startDate: e.target.value }))} /></Field>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
-            <input type="checkbox" checked={newLoan.excludeWeekends} onChange={e => setNewLoan(p => ({ ...p, excludeWeekends: e.target.checked }))} />
-            <span style={{ fontSize: 12, color: "#8ab4c8" }}>Exclude weekends & holidays</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer", padding: "10px 4px" }}>
+            <input type="checkbox" checked={newLoan.excludeWeekends} onChange={e => setNewLoan(p => ({ ...p, excludeWeekends: e.target.checked }))} style={{ width: 20, height: 20 }} />
+            <span style={{ fontSize: 13, color: "#8ab4c8" }}>Exclude weekends & holidays</span>
           </label>
-          <button onClick={isAdmin ? handleAddLoan : handleRequestLoan} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ {isAdmin ? "Issue" : "Request"}</button>
+          <button onClick={isAdmin ? handleAddLoan : handleRequestLoan} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ {isAdmin ? "Issue" : "Request"}</button>
         </Modal>
       )}
 
       {showPayment && (
         <Modal title="Record Payment" onClose={() => { setShowPayment(null); setPaymentAmount(""); }}>
           <Field label="Amount *"><input type="number" style={IS} value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} autoFocus /></Field>
-          <button onClick={() => handlePayment()} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Record</button>
+          <button onClick={() => handlePayment()} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Record</button>
         </Modal>
       )}
 
       {showSavingsTx && (
         <Modal title={showSavingsTx.type === "deposit" ? "📥 Deposit" : "📤 Withdrawal"} onClose={() => { setShowSavingsTx(null); setSavingsAmount(""); setAdminDirectSavingsInput(""); }}>
           <Field label="Amount"><input type="number" style={IS} value={savingsAmount} onChange={e => setSavingsAmount(e.target.value)} autoFocus /></Field>
-          <button onClick={handleSavingsTransaction} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800, marginBottom: isAdmin ? 10 : 0 }}>✓ Confirm</button>
+          <button onClick={handleSavingsTransaction} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, marginBottom: isAdmin ? 10 : 0, minHeight: 48 }}>✓ Confirm</button>
           {isAdmin && (
             <>
               <div style={{ margin: "14px 0", padding: 10, background: "rgba(167,139,250,0.06)", borderRadius: 10 }}>
                 <div style={{ fontSize: 11, color: "#a78bfa", fontWeight: 700, marginBottom: 6 }}>🛡️ Admin: Set exact balance</div>
                 <input type="number" style={IS} value={adminDirectSavingsInput} onChange={e => setAdminDirectSavingsInput(e.target.value)} placeholder="New balance..." />
               </div>
-              <button onClick={handleAdminSavingsAdj} style={{ width: "100%", background: "#c084fc", border: "none", color: "#000", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 800 }}>Set Balance</button>
+              <button onClick={handleAdminSavingsAdj} style={{ width: "100%", background: "#c084fc", border: "none", color: "#000", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 800, minHeight: 44 }}>Set Balance</button>
             </>
           )}
         </Modal>
@@ -2324,29 +2234,29 @@ export default function App() {
 
       {adminEditInstallment && (
         <Modal title="Admin: Edit Installment" onClose={() => setAdminEditInstallment(null)}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer" }}>
-            <input type="checkbox" checked={adminInstOverride.paid} onChange={e => setAdminInstOverride(p => ({ ...p, paid: e.target.checked }))} />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", padding: "8px 4px" }}>
+            <input type="checkbox" checked={adminInstOverride.paid} onChange={e => setAdminInstOverride(p => ({ ...p, paid: e.target.checked }))} style={{ width: 20, height: 20 }} />
             <span style={{ fontSize: 13, color: "#e8f4fd" }}>Mark as paid</span>
           </label>
           <Field label="Paid Amount"><input type="number" style={IS} value={adminInstOverride.paidAmount} onChange={e => setAdminInstOverride(p => ({ ...p, paidAmount: e.target.value }))} /></Field>
           <Field label="Due Date"><input type="date" style={IS} value={adminInstOverride.dueDate} onChange={e => setAdminInstOverride(p => ({ ...p, dueDate: e.target.value }))} /></Field>
           <Field label="Paid Date"><input type="date" style={IS} value={adminInstOverride.paidDate} onChange={e => setAdminInstOverride(p => ({ ...p, paidDate: e.target.value }))} /></Field>
-          <button onClick={handleAdminInstOverride} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Apply</button>
+          <button onClick={handleAdminInstOverride} style={{ width: "100%", background: "#f59e0b", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Apply</button>
         </Modal>
       )}
 
       {showRestructure && (
         <Modal title="🔄 Restructure Loan" onClose={() => { setShowRestructure(null); setRestructureInput({ newDailyAmount: "", reason: "" }); }}>
           <Field label="New Daily Amount *"><input type="number" style={IS} value={restructureInput.newDailyAmount} onChange={e => setRestructureInput(p => ({ ...p, newDailyAmount: e.target.value }))} autoFocus /></Field>
-          <Field label="Reason *"><textarea style={{ ...IS, minHeight: 60, resize: "vertical" }} value={restructureInput.reason} onChange={e => setRestructureInput(p => ({ ...p, reason: e.target.value }))} placeholder="Why is this loan being restructured?" /></Field>
-          <button onClick={handleRestructure} style={{ width: "100%", background: "linear-gradient(135deg,#c084fc,#a855f7)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Restructure</button>
+          <Field label="Reason *"><textarea style={{ ...IS, minHeight: 60, resize: "vertical" }} value={restructureInput.reason} onChange={e => setRestructureInput(p => ({ ...p, reason: e.target.value }))} placeholder="Why restructure?" /></Field>
+          <button onClick={handleRestructure} style={{ width: "100%", background: "linear-gradient(135deg,#c084fc,#a855f7)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Restructure</button>
         </Modal>
       )}
 
       {showAssignClient && (
         <Modal title="Reassign Client" onClose={() => setShowAssignClient(null)}>
           {users.filter(u => u.role !== "admin" && u.active).map(o => (
-            <button key={o.id} onClick={() => handleAssignClient(showAssignClient.id, o.id)} style={{ width: "100%", background: showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)"}`, color: "#e8f4fd", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, marginBottom: 6, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <button key={o.id} onClick={() => handleAssignClient(showAssignClient.id, o.id)} style={{ width: "100%", background: showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${showAssignClient.assignedTo === o.id ? "rgba(34,197,94,0.3)" : "rgba(255,255,255,0.08)"}`, color: "#e8f4fd", padding: "12px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, marginBottom: 6, textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 48 }}>
               <span>{o.name}</span>
               {showAssignClient.assignedTo === o.id && <Icon name="check" size={14} />}
             </button>
@@ -2358,11 +2268,11 @@ export default function App() {
         <Modal title="⚠️ Confirm Delete" onClose={() => setConfirmDelete(null)}>
           <div style={{ padding: 14, background: "rgba(239,68,68,0.08)", borderRadius: 10, marginBottom: 14 }}>
             <div style={{ fontSize: 13, color: "#f87171", fontWeight: 700 }}>Delete {confirmDelete.name}?</div>
-            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 4 }}>All loan and savings data will be lost.</div>
+            <div style={{ fontSize: 11, color: "#7a3a3a", marginTop: 4 }}>All data will be lost.</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700 }}>Cancel</button>
-            <button onClick={() => handleDeleteClient(confirmDelete.id)} style={{ flex: 1, background: "#ef4444", border: "none", color: "#fff", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 800 }}>Delete</button>
+            <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, minHeight: 44 }}>Cancel</button>
+            <button onClick={() => handleDeleteClient(confirmDelete.id)} style={{ flex: 1, background: "#ef4444", border: "none", color: "#fff", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 800, minHeight: 44 }}>Delete</button>
           </div>
         </Modal>
       )}
@@ -2377,9 +2287,22 @@ export default function App() {
           <Field label="Current Password"><input type="password" style={IS} value={profileEdit.oldPassword} onChange={e => setProfileEdit(p => ({ ...p, oldPassword: e.target.value }))} /></Field>
           <Field label="New Password"><input type="password" style={IS} value={profileEdit.newPassword} onChange={e => setProfileEdit(p => ({ ...p, newPassword: e.target.value }))} /></Field>
           <Field label="Confirm New"><input type="password" style={IS} value={profileEdit.confirmPassword} onChange={e => setProfileEdit(p => ({ ...p, confirmPassword: e.target.value }))} /></Field>
-          <button onClick={handleChangePassword} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 800 }}>✓ Change Password</button>
+          <button onClick={handleChangePassword} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>✓ Change Password</button>
+          {isAdmin && (
+            <>
+              <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", margin: "16px 0 14px", paddingTop: 14 }}>
+                <div style={{ fontSize: 12, color: "#a78bfa", fontWeight: 700, marginBottom: 10 }}>⚙️ Security Settings</div>
+              </div>
+              <button onClick={() => { setShowProfile(false); setShowTimeoutSettings(true); }} style={{ width: "100%", background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 48 }}>
+                <span>⏰ Session Timeout</span>
+                <span style={{ background: "rgba(167,139,250,0.15)", padding: "4px 12px", borderRadius: 8, fontFamily: "'Courier New',monospace", fontSize: 12 }}>
+                  {sessionTimeout}m
+                </span>
+              </button>
+            </>
+          )}
         </Modal>
       )}
     </div>
   );
-          }
+              }
