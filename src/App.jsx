@@ -79,7 +79,6 @@ function calcLoanSchedule(principal, rate, days, start, excl) {
   return { dailyPayment: daily, totalRepayable: total, totalInterest: interest, schedule };
 }
 
-// ─── SMART PAYMENT ENGINE (defaults settled first) ───────────────────────────
 function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   let remaining = amountPaid;
   const updated = schedule.map(s => ({ ...s, paymentLog: [...(s.paymentLog || [])] }));
@@ -169,7 +168,6 @@ function applySmartPayment(schedule, startIdx, amountPaid, paidDate, paidBy) {
   return updated;
 }
 
-// ─── LOAN RESTRUCTURE ────────────────────────────────────────────────────────
 function restructureLoan(loan, newDailyAmount, reason, approvedBy) {
   const unpaidSlots = loan.schedule.filter(s => !s.paid);
   const totalUnpaidOwed = unpaidSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
@@ -482,7 +480,6 @@ function getClientTransactions(client) {
 const DEFAULT_USERS = [
   { id: "admin_001", username: "Yebaba", password: "Go5win619$", role: "admin", name: "Admin", createdAt: "2026-04-21", active: true }
 ];
-// ─── ICONS ───────────────────────────────────────────────────────────────────
 const Icon = ({ name, size = 16 }) => {
   const icons = {
     plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>,
@@ -514,7 +511,6 @@ const Icon = ({ name, size = 16 }) => {
   return icons[name] || null;
 };
 
-// ─── UI COMPONENTS ───────────────────────────────────────────────────────────
 function Modal({ title, onClose, children, wide }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.92)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 12, backdropFilter: "blur(8px)" }}>
@@ -559,12 +555,7 @@ function Toast({ msg, type }) {
 
 function ModernStatCard({ label, value, icon, gradient, danger, badge }) {
   return (
-    <div style={{
-      background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
-      border: "1px solid rgba(255,255,255,0.06)",
-      borderRadius: 16, padding: "14px 15px",
-      position: "relative", overflow: "hidden", minHeight: 100
-    }}>
+    <div style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: "14px 15px", position: "relative", overflow: "hidden", minHeight: 100 }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: gradient }} />
       <div style={{ width: 32, height: 32, borderRadius: 9, background: gradient, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, marginBottom: 10 }}>{icon}</div>
       <div style={{ fontSize: 9, color: "#5a7a90", letterSpacing: 1, textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>{label}</div>
@@ -1014,7 +1005,7 @@ function LoginScreen({ users, onLogin }) {
       </div>
     </div>
   );
-    }
+      }
 function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, onApproveLoan, onRejectLoan, showToast }) {
   const [showAdd, setShowAdd] = useState(false);
   const [ns, setNs] = useState({ name: "", username: "", password: "", role: "loan_officer" });
@@ -1129,7 +1120,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setResetPwd(o)} title="Reset Password" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button onClick={() => setResetPwd(o)} style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Icon name="key" size={13} />
                 </button>
                 <button onClick={() => setEditS(o)} style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.2)", color: "#60a5fa", width: 36, height: 36, borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1190,7 +1181,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
             </select>
           </div>
           {staffReport.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 40, color: "#3a5a70" }}>No staff data for this month.</div>
+            <div style={{ textAlign: "center", padding: 40, color: "#3a5a70" }}>No staff data.</div>
           ) : staffReport.map(sr => {
             const rateColor = sr.collectionRate >= 80 ? "#22c55e" : sr.collectionRate >= 50 ? "#f59e0b" : "#ef4444";
             return (
@@ -1223,7 +1214,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
   );
 }
 
-// ─── MAIN APP ────────────────────────────────────────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [clients, setClients] = useState([]);
@@ -1262,8 +1252,6 @@ export default function App() {
   const [routeVisited, setRouteVisited] = useState({});
   const [lastBackupDate, setLastBackupDate] = useState(() => localStorage.getItem("creda_last_backup") || null);
   const [dismissedBackup, setDismissedBackup] = useState(false);
-
-  // ── AUTO-TIMEOUT (10 minutes) ──────────────────────────────────────────
   const [sessionTimeout, setSessionTimeout] = useState(() => parseInt(localStorage.getItem("creda_timeout") || "10"));
   const [lastActivity, setLastActivity] = useState(Date.now());
   const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
@@ -1277,7 +1265,6 @@ export default function App() {
   const isAdmin = currentUser?.role === "admin";
   const today = new Date();
 
-  // Auto-timeout tracking
   useEffect(() => {
     if (!currentUser) return;
     const resetActivity = () => {
@@ -1353,6 +1340,35 @@ export default function App() {
     }
     return computeMonthlyStats(src, curMonthKey);
   }, [clients, visibleClients, isAdmin]);
+
+  // ─── OFFICER PORTFOLIO TOTALS (all-time) ─────────────────────
+  const officerPortfolio = useMemo(() => {
+    const src = visibleClients;
+    let totalCapital = 0, totalCollectedEver = 0, totalOutstanding = 0;
+    let activeClientCount = 0, activeLoanCount = 0, overdueTotal = 0;
+    const t = new Date();
+    src.forEach(c => {
+      let hasActive = false;
+      (c.loans || []).forEach(l => {
+        totalCapital += l.principal || 0;
+        const collected = (l.schedule || []).reduce((sum, s) => sum + (s.paidAmount || 0), 0);
+        totalCollectedEver += collected;
+        if (l.status === "active") {
+          hasActive = true;
+          activeLoanCount++;
+          const remaining = (l.schedule || []).filter(s => !s.paid).reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
+          totalOutstanding += remaining;
+          (l.schedule || []).forEach(s => {
+            if (!s.paid && new Date(s.dueDate) < t) {
+              overdueTotal += (s.payment - (s.paidAmount || 0));
+            }
+          });
+        }
+      });
+      if (hasActive) activeClientCount++;
+    });
+    return { totalCapital, totalCollectedEver, totalOutstanding, activeClientCount, activeLoanCount, overdueTotal };
+  }, [visibleClients]);
 
   const monthlyReport = useMemo(() => computeMonthlyReport(clients), [clients]);
 
@@ -1583,7 +1599,7 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "11.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "12.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1827,12 +1843,73 @@ export default function App() {
                 ))}
               </div>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
-              <ModernStatCard label={isAdmin ? "Disbursed" : "This Month"} value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
-              <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
-              <ModernStatCard label="Outstanding" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > stats.totalDisbursed * 0.5} />
-              <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
-            </div>
+
+            {isAdmin ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
+                <ModernStatCard label="Disbursed" value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
+                <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
+                <ModernStatCard label="Outstanding" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > stats.totalDisbursed * 0.5} />
+                <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
+              </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>📅</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#60a5fa" }}>This Month</div>
+                      <div style={{ fontSize: 9, color: "#5a7a90" }}>{fm(curMonthKey)} — resets monthly</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <ModernStatCard label="Disbursed" value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
+                    <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
+                    <ModernStatCard label="Expected" value={fc(stats.totalExpected || 0)} icon="📊" gradient="linear-gradient(135deg,#7c3aed,#a855f7)" />
+                    <ModernStatCard label="Month Gap" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > 0} />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 22 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#16a34a,#22c55e)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🏦</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "#4ade80" }}>My Portfolio</div>
+                      <div style={{ fontSize: 9, color: "#5a7a90" }}>All-time totals across all clients</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    <ModernStatCard label="Capital Given" value={fc(officerPortfolio.totalCapital)} icon="🛡️" gradient="linear-gradient(135deg,#0369a1,#0ea5e9)" />
+                    <ModernStatCard label="Total Collected" value={fc(officerPortfolio.totalCollectedEver)} icon="💵" gradient="linear-gradient(135deg,#166534,#16a34a)" />
+                    <ModernStatCard label="Outstanding" value={fc(officerPortfolio.totalOutstanding)} icon="⚠️" gradient="linear-gradient(135deg,#991b1b,#dc2626)" danger={officerPortfolio.totalOutstanding > 0} />
+                    <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
+                  </div>
+                  <div style={{ background: "linear-gradient(135deg,rgba(74,222,128,0.06),rgba(34,197,94,0.03))", border: "1px solid rgba(74,222,128,0.15)", borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-around" }}>
+                    <div style={{ textAlign: "center", flex: 1 }}>
+                      <div style={{ fontSize: 9, color: "#5a7a90", letterSpacing: 0.5 }}>ACTIVE</div>
+                      <div style={{ fontSize: 16, fontWeight: 900, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{officerPortfolio.activeClientCount}</div>
+                      <div style={{ fontSize: 8, color: "#3a5a70" }}>clients</div>
+                    </div>
+                    <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
+                    <div style={{ textAlign: "center", flex: 1 }}>
+                      <div style={{ fontSize: 9, color: "#5a7a90", letterSpacing: 0.5 }}>LOANS</div>
+                      <div style={{ fontSize: 16, fontWeight: 900, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{officerPortfolio.activeLoanCount}</div>
+                      <div style={{ fontSize: 8, color: "#3a5a70" }}>running</div>
+                    </div>
+                    {officerPortfolio.overdueTotal > 0 && (
+                      <>
+                        <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
+                        <div style={{ textAlign: "center", flex: 1 }}>
+                          <div style={{ fontSize: 9, color: "#5a7a90", letterSpacing: 0.5 }}>OVERDUE</div>
+                          <div style={{ fontSize: 14, fontWeight: 900, color: "#f87171", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{fc(officerPortfolio.overdueTotal)}</div>
+                          <div style={{ fontSize: 8, color: "#3a5a70" }}>to recover</div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
             {isAdmin && <ModernPortfolioCard fin={globalFin} expanded={expandFinancials} onToggle={() => setExpandFinancials(!expandFinancials)} />}
             {isAdmin && <DefaultersSection clients={clients} monthKey={null} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
             {isAdmin && (
@@ -2106,53 +2183,29 @@ export default function App() {
         )}
       </nav>
 
-      {/* ── SESSION TIMEOUT WARNING ── */}
       {showTimeoutWarning && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.95)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(10px)" }}>
           <div style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.15), rgba(234,88,12,0.1))", border: "2px solid rgba(245,158,11,0.4)", borderRadius: 20, padding: 24, maxWidth: 380, width: "100%", textAlign: "center", boxShadow: "0 20px 60px rgba(245,158,11,0.3)" }}>
             <div style={{ fontSize: 48, marginBottom: 14 }}>⏰</div>
             <div style={{ fontSize: 18, fontWeight: 800, color: "#f59e0b", marginBottom: 8 }}>Session Expiring</div>
-            <div style={{ fontSize: 13, color: "#e8f4fd", marginBottom: 20, lineHeight: 1.5 }}>
-              You'll be logged out in 2 minutes due to inactivity.
-              <br /><br />
-              <span style={{ color: "#8ab4c8", fontSize: 11 }}>Tap anywhere or the button below to stay signed in.</span>
-            </div>
-            <button onClick={() => { setLastActivity(Date.now()); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 10, minHeight: 48 }}>
-              ✓ Stay Signed In
-            </button>
-            <button onClick={() => { setCurrentUser(null); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 700, fontSize: 13, minHeight: 44 }}>
-              Sign Out Now
-            </button>
+            <div style={{ fontSize: 13, color: "#e8f4fd", marginBottom: 20, lineHeight: 1.5 }}>You'll be logged out in 2 minutes due to inactivity.<br /><br /><span style={{ color: "#8ab4c8", fontSize: 11 }}>Tap anywhere or the button below to stay signed in.</span></div>
+            <button onClick={() => { setLastActivity(Date.now()); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, marginBottom: 10, minHeight: 48 }}>✓ Stay Signed In</button>
+            <button onClick={() => { setCurrentUser(null); setShowTimeoutWarning(false); }} style={{ width: "100%", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171", padding: "12px", borderRadius: 12, cursor: "pointer", fontWeight: 700, fontSize: 13, minHeight: 44 }}>Sign Out Now</button>
           </div>
         </div>
       )}
 
-      {/* ── TIMEOUT SETTINGS ── */}
       {showTimeoutSettings && (
         <Modal title="⏰ Session Timeout" onClose={() => setShowTimeoutSettings(false)}>
           <div style={{ padding: 14, background: "rgba(59,130,246,0.06)", borderRadius: 10, marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: "#60a5fa", fontWeight: 700, marginBottom: 6 }}>🔐 Current Setting</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>
-              {sessionTimeout} minute{sessionTimeout !== 1 ? "s" : ""}
-            </div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "#e8f4fd", fontFamily: "'Courier New',monospace" }}>{sessionTimeout} minute{sessionTimeout !== 1 ? "s" : ""}</div>
             <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 6 }}>Users logged out after this idle period</div>
           </div>
           <div style={{ fontSize: 12, color: "#8ab4c8", marginBottom: 10, fontWeight: 600 }}>Choose Duration:</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
             {[5, 10, 15, 30, 60, 120].map(mins => (
-              <button key={mins} onClick={() => {
-                setSessionTimeout(mins);
-                localStorage.setItem("creda_timeout", mins.toString());
-                setLastActivity(Date.now());
-                showToast(`Timeout set to ${mins} minutes`);
-              }} style={{
-                background: sessionTimeout === mins ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)",
-                border: "none", color: sessionTimeout === mins ? "#000" : "#8ab4c8",
-                padding: "14px", borderRadius: 10, cursor: "pointer",
-                fontWeight: 800, fontSize: 13, minHeight: 48
-              }}>
-                {mins < 60 ? `${mins} min` : `${mins / 60} hr`}
-              </button>
+              <button key={mins} onClick={() => { setSessionTimeout(mins); localStorage.setItem("creda_timeout", mins.toString()); setLastActivity(Date.now()); showToast(`Timeout set to ${mins} minutes`); }} style={{ background: sessionTimeout === mins ? "linear-gradient(135deg,#22c55e,#16a34a)" : "rgba(255,255,255,0.04)", border: "none", color: sessionTimeout === mins ? "#000" : "#8ab4c8", padding: "14px", borderRadius: 10, cursor: "pointer", fontWeight: 800, fontSize: 13, minHeight: 48 }}>{mins < 60 ? `${mins} min` : `${mins / 60} hr`}</button>
             ))}
           </div>
           <button onClick={() => setShowTimeoutSettings(false)} style={{ width: "100%", background: "linear-gradient(135deg,#3b82f6,#2563eb)", border: "none", color: "#fff", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, minHeight: 48 }}>Done</button>
@@ -2295,9 +2348,7 @@ export default function App() {
               </div>
               <button onClick={() => { setShowProfile(false); setShowTimeoutSettings(true); }} style={{ width: "100%", background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 48 }}>
                 <span>⏰ Session Timeout</span>
-                <span style={{ background: "rgba(167,139,250,0.15)", padding: "4px 12px", borderRadius: 8, fontFamily: "'Courier New',monospace", fontSize: 12 }}>
-                  {sessionTimeout}m
-                </span>
+                <span style={{ background: "rgba(167,139,250,0.15)", padding: "4px 12px", borderRadius: 8, fontFamily: "'Courier New',monospace", fontSize: 12 }}>{sessionTimeout}m</span>
               </button>
             </>
           )}
@@ -2305,4 +2356,4 @@ export default function App() {
       )}
     </div>
   );
-              }
+    }
