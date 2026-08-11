@@ -43,7 +43,56 @@ const fm = (ym) => {
 };
 const todayStr = new Date().toISOString().split("T")[0];
 const curMonthKey = todayStr.slice(0, 7);
-const DORMANT_DAYS = 14; // 2 weeks
+const DORMANT_DAYS = 14;
+
+// Normalize phone numbers for comparison
+function normalizePhone(phone) {
+  if (!phone) return "";
+  return phone.replace(/\D/g, "").replace(/^234/, "0").replace(/^0+/, "0");
+}
+
+// Normalize names for comparison
+function normalizeName(name) {
+  if (!name) return "";
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// ─── DUPLICATE DETECTION ─────────────────────────────────────────────────────
+function findDuplicates(clients, newName, newPhone, excludeId = null) {
+  const normNewName = normalizeName(newName);
+  const normNewPhone = normalizePhone(newPhone);
+  const duplicates = [];
+  clients.forEach(c => {
+    if (c.id === excludeId) return;
+    const nameMatch = normalizeName(c.name) === normNewName;
+    const phoneMatch = normalizePhone(c.phone) === normNewPhone && normNewPhone.length >= 10;
+    if (nameMatch || phoneMatch) {
+      duplicates.push({ ...c, matchType: nameMatch && phoneMatch ? "both" : nameMatch ? "name" : "phone" });
+    }
+  });
+  return duplicates;
+}
+
+// Find all suspected duplicate accounts across the entire client base
+function findAllDuplicates(clients) {
+  const groups = [];
+  const seen = new Set();
+  clients.forEach((c, i) => {
+    if (seen.has(c.id)) return;
+    const matches = clients.filter((c2, j) => {
+      if (i === j) return false;
+      const namematch = normalizeName(c.name) === normalizeName(c2.name);
+      const phoneMatch = normalizePhone(c.phone) === normalizePhone(c2.phone) && normalizePhone(c.phone).length >= 10;
+      return namematch || phoneMatch;
+    });
+    if (matches.length > 0) {
+      const group = [c, ...matches];
+      group.forEach(g => seen.add(g.id));
+      groups.push(group);
+    }
+  });
+  return groups;
+}
 
 function getRepayDays(start, count, excl) {
   const days = [];
@@ -216,20 +265,16 @@ function computeTotalShortfall(loan) {
   return { totalShortfall, shortfallDays };
 }
 
-// ─── DORMANT CLIENT CHECK ────────────────────────────────────────────────────
 function isDormant(client) {
   const hasActive = client.loans?.some(l => l.status === "active");
   if (hasActive) return false;
   if (!client.loans || client.loans.length === 0) {
-    // No loan ever - check if registered > 14 days ago
     if (!client.createdAt) return false;
     const daysSince = Math.floor((new Date() - new Date(client.createdAt)) / (1000 * 60 * 60 * 24));
     return daysSince >= DORMANT_DAYS;
   }
-  // Had loans - check last completed loan
   const lastLoan = client.loans[client.loans.length - 1];
   if (!lastLoan || lastLoan.status !== "completed") return false;
-  // Find last payment date
   let lastActivityDate = null;
   (lastLoan.schedule || []).forEach(s => {
     if (s.paidDate) {
@@ -304,7 +349,6 @@ function computeDefaultingClientsReport(clients, monthKey) {
   return defaulters.sort((a, b) => b.totalOwed - a.totalOwed);
 }
 
-// ─── STAFF DEFAULTERS (2+ days overdue) ──────────────────────────────────────
 function computeStaffDefaulters(clients, officerId) {
   const today = new Date();
   const defaulters = [];
@@ -312,7 +356,7 @@ function computeStaffDefaulters(clients, officerId) {
     (c.loans || []).forEach(l => {
       if (l.status !== "active") return;
       const overdueSlots = (l.schedule || []).filter(s => !s.paid && new Date(s.dueDate) < today);
-      if (overdueSlots.length < 2) return; // 2+ days overdue only
+      if (overdueSlots.length < 2) return;
       const totalOwed = overdueSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
       defaulters.push({
         clientId: c.id,
@@ -326,6 +370,43 @@ function computeStaffDefaulters(clients, officerId) {
     });
   });
   return defaulters.sort((a, b) => b.daysOverdue - a.daysOverdue);
+}
+
+// ─── TODAY'S PERFORMANCE (Officer daily metrics) ─────────────────────────────
+function computeTodayPerformance(clients) {
+  let expected = 0, loanCollected = 0, savingsDeposited = 0;
+  const today = new Date();
+  clients.forEach(c => {
+    // Expected today from active loans
+    (c.loans || []).forEach(l => {
+      if (l.status !== "active") return;
+      (l.schedule || []).forEach(s => {
+        if (s.dueDate === todayStr && !s.paid) {
+          expected += (s.payment - (s.paidAmount || 0));
+        }
+      });
+      // Loan payments collected today (from paymentLog dates)
+      (l.schedule || []).forEach(s => {
+        (s.paymentLog || []).forEach(pl => {
+          if (pl.date === todayStr) loanCollected += pl.amount || 0;
+        });
+      });
+    });
+    // Savings deposits today
+    (c.savingsLogs || []).forEach(log => {
+      if (log.date === todayStr && log.type === "deposit") {
+        savingsDeposited += log.amount || 0;
+      }
+    });
+  });
+  const totalCollected = loanCollected + savingsDeposited;
+  return {
+    expected,
+    loanCollected,
+    savingsDeposited,
+    totalCollected,
+    gap: Math.max(0, expected - loanCollected)
+  };
 }
 
 function computeFinancials(clients) {
@@ -458,47 +539,9 @@ function computeMonthlyReport(clients) {
     .sort((a, b) => b.month.localeCompare(a.month));
 }
 
-function computeStaffMonthlyReport(clients, users, monthKey) {
-  const staffReports = [];
-  const today = new Date();
-  users.filter(u => u.role !== "admin").forEach(officer => {
-    const myClients = clients.filter(c => c.assignedTo === officer.id);
-    let disbursed = 0, collected = 0, expectedThisMonth = 0, overdueCount = 0, loansIssued = 0, paymentsReceived = 0;
-    const activeClientIds = new Set();
-    myClients.forEach(c => {
-      (c.loans || []).forEach(l => {
-        if ((l.issuedAt || l.startDate || "").slice(0, 7) === monthKey) { disbursed += l.principal || 0; loansIssued++; }
-        (l.schedule || []).forEach(s => {
-          if ((s.dueDate || "").slice(0, 7) === monthKey) {
-            expectedThisMonth += s.payment || 0;
-            if (s.paidAmount > 0) {
-              collected += s.paidAmount;
-              if (s.paymentLog && s.paymentLog.length > 0) {
-                s.paymentLog.forEach(pl => { if ((pl.date || "").slice(0, 7) === monthKey) paymentsReceived++; });
-              } else paymentsReceived++;
-            } else if (new Date(s.dueDate) < today) overdueCount++;
-            activeClientIds.add(c.id);
-          }
-        });
-      });
-    });
-    staffReports.push({
-      officer, totalClients: myClients.length, activeClients: activeClientIds.size,
-      disbursed, collected, expectedThisMonth,
-      outstanding: Math.max(0, expectedThisMonth - collected),
-      overdueCount, loansIssued, paymentsReceived,
-      collectionRate: expectedThisMonth > 0 ? (collected / expectedThisMonth) * 100 : 0,
-      savingsBalance: myClients.reduce((a, c) => a + (c.savingsBalance || 0), 0)
-    });
-  });
-  return staffReports;
-}
-
-// ─── STAFF PORTFOLIO (Admin view of officer performance) ─────────────────────
 function computeStaffPortfolio(clients, officerId) {
   const myClients = clients.filter(c => c.assignedTo === officerId);
   let capital = 0, outstanding = 0, activeClientCount = 0, activeLoanCount = 0;
-  const today = new Date();
   myClients.forEach(c => {
     let hasActive = false;
     (c.loans || []).forEach(l => {
@@ -559,6 +602,7 @@ function getClientTransactions(client) {
 const DEFAULT_USERS = [
   { id: "admin_001", username: "Yebaba", password: "Go5win619$", role: "admin", name: "Admin", createdAt: "2026-04-21", active: true }
 ];
+
 const Icon = ({ name, size = 16 }) => {
   const icons = {
     plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>,
@@ -741,7 +785,6 @@ function DefaultersSection({ clients, monthKey, onSelectClient }) {
   );
 }
 
-// ─── NEW: DORMANT CLIENTS SECTION ────────────────────────────────────────────
 function DormantSection({ clients, onSelectClient }) {
   const [expanded, setExpanded] = useState(false);
   const dormantClients = useMemo(() => clients.filter(c => isDormant(c)), [clients]);
@@ -753,7 +796,7 @@ function DormantSection({ clients, onSelectClient }) {
           <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #475569, #64748b)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>⚫</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#94a3b8" }}>{dormantClients.length} Dormant Client{dormantClients.length !== 1 ? "s" : ""}</div>
-            <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>No active loan for 14+ days · Consider reactivation</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>No active loan for 14+ days</div>
           </div>
         </div>
         <button style={{ background: "rgba(148,163,184,0.15)", border: "none", borderRadius: 9, color: "#94a3b8", padding: "8px 12px", fontSize: 11, cursor: "pointer", fontWeight: 700, minHeight: 36 }}>{expanded ? "▲" : "▼"}</button>
@@ -784,6 +827,97 @@ function DormantSection({ clients, onSelectClient }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NEW: DUPLICATE CLIENTS ALERT ────────────────────────────────────────────
+function DuplicatesSection({ clients, onSelectClient }) {
+  const [expanded, setExpanded] = useState(false);
+  const dupeGroups = useMemo(() => findAllDuplicates(clients), [clients]);
+  if (dupeGroups.length === 0) return null;
+  return (
+    <div style={{ background: "linear-gradient(135deg, rgba(234,88,12,0.12), rgba(194,65,12,0.06))", border: "1px solid rgba(234,88,12,0.35)", borderRadius: 18, padding: 18, marginBottom: 20 }}>
+      <div onClick={() => setExpanded(!expanded)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #7c2d12, #ea580c)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🚨</div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#fb923c" }}>{dupeGroups.length} Suspected Duplicate{dupeGroups.length !== 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 11, color: "#9a3412", marginTop: 2 }}>Same name or phone across multiple accounts</div>
+          </div>
+        </div>
+        <button style={{ background: "rgba(234,88,12,0.15)", border: "none", borderRadius: 9, color: "#fb923c", padding: "8px 12px", fontSize: 11, cursor: "pointer", fontWeight: 700, minHeight: 36 }}>{expanded ? "▲" : "▼"}</button>
+      </div>
+      {expanded && (
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+          {dupeGroups.map((group, gIdx) => (
+            <div key={gIdx} style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(234,88,12,0.2)", borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#fb923c", fontWeight: 700, marginBottom: 8, letterSpacing: 0.5 }}>
+                ⚠️ GROUP #{gIdx + 1} — {group.length} matching accounts
+              </div>
+              {group.map(c => (
+                <div key={c.id} onClick={() => onSelectClient(c.id)} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: "10px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd" }}>{c.name}</div>
+                    <div style={{ fontSize: 10, color: "#9a3412", marginTop: 2 }}>{c.phone} · Registered by {c.assignedToName || "Unknown"} · {fd(c.createdAt)}</div>
+                  </div>
+                  <div style={{ fontSize: 9, color: "#fb923c", fontWeight: 700 }}>→</div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NEW: TODAY'S PERFORMANCE CARD (Officer) ─────────────────────────────────
+function TodayPerformanceCard({ perf }) {
+  const rate = perf.expected > 0 ? (perf.loanCollected / perf.expected) * 100 : 0;
+  const rateColor = rate >= 80 ? "#22c55e" : rate >= 50 ? "#f59e0b" : "#ef4444";
+  return (
+    <div style={{ background: "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.06))", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 18, padding: 18, marginBottom: 20, boxShadow: "0 8px 32px rgba(34,197,94,0.15)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#f59e0b,#ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🔥</div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80" }}>Today's Performance</div>
+          <div style={{ fontSize: 10, color: "#5a7a90" }}>{fd(todayStr)} — Live tracking</div>
+        </div>
+      </div>
+      <div style={{ textAlign: "center", padding: "8px 0 14px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+        <div style={{ fontSize: 28, fontWeight: 900, color: "#4ade80", fontFamily: "'Courier New',monospace", letterSpacing: -1 }}>{fc(perf.totalCollected)}</div>
+        <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 4 }}>Total received today (loans + savings)</div>
+      </div>
+      <div style={{ padding: "14px 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 10, color: "#5a7a90", fontWeight: 600 }}>Loan Collection Rate</span>
+          <span style={{ fontSize: 12, color: rateColor, fontWeight: 800, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}%</span>
+        </div>
+        <div style={{ height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: rate >= 80 ? "linear-gradient(90deg,#22c55e,#4ade80)" : rate >= 50 ? "linear-gradient(90deg,#d97706,#f59e0b)" : "linear-gradient(90deg,#dc2626,#f87171)", borderRadius: 4 }} />
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        <div style={{ padding: 10, background: "rgba(96,165,250,0.06)", borderRadius: 9, border: "1px solid rgba(96,165,250,0.15)", textAlign: "center" }}>
+          <div style={{ fontSize: 8, color: "#5a7a90" }}>EXPECTED</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.expected)}</div>
+        </div>
+        <div style={{ padding: 10, background: "rgba(74,222,128,0.06)", borderRadius: 9, border: "1px solid rgba(74,222,128,0.15)", textAlign: "center" }}>
+          <div style={{ fontSize: 8, color: "#5a7a90" }}>LOAN PAID</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.loanCollected)}</div>
+        </div>
+        <div style={{ padding: 10, background: perf.gap > 0 ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)", borderRadius: 9, border: `1px solid ${perf.gap > 0 ? "rgba(248,113,113,0.15)" : "rgba(74,222,128,0.15)"}`, textAlign: "center" }}>
+          <div style={{ fontSize: 8, color: "#5a7a90" }}>GAP</div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: perf.gap > 0 ? "#f87171" : "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.gap)}</div>
+        </div>
+      </div>
+      {perf.savingsDeposited > 0 && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 9, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 10, color: "#a78bfa", fontWeight: 700 }}>💎 Savings deposits today</div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#a78bfa", fontFamily: "'Courier New',monospace" }}>{fc(perf.savingsDeposited)}</div>
         </div>
       )}
     </div>
@@ -1135,7 +1269,6 @@ function LoginScreen({ users, onLogin }) {
   );
 }
 
-// ─── NEW STAFF PANEL (Monthly stats + Defaulters always visible) ─────────────
 function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, onApproveLoan, onRejectLoan, showToast }) {
   const [showAdd, setShowAdd] = useState(false);
   const [ns, setNs] = useState({ name: "", username: "", password: "", role: "loan_officer" });
@@ -1143,7 +1276,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
   const [resetPwd, setResetPwd] = useState(null);
   const [newPwd, setNewPwd] = useState("");
   const [expandDefaulters, setExpandDefaulters] = useState({});
-  const [showLoanDetails, setShowLoanDetails] = useState(null);
 
   const handleAdd = () => {
     if (!ns.name || !ns.username || !ns.password) { showToast("All fields required", "error"); return; }
@@ -1175,7 +1307,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
         </button>
       </div>
 
-      {/* NEW: PENDING LOAN REQUESTS WITH FULL DETAILS */}
       {pendingLoans.length > 0 && (
         <div style={{ background: "linear-gradient(135deg,rgba(245,158,11,0.08),rgba(234,88,12,0.05))", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 16, padding: 16, marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -1247,7 +1378,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
         </div>
       )}
 
-      {/* STAFF LIST — Monthly stats + Defaulters always visible */}
       {users.filter(u => u.role !== "admin").map(o => {
         const monthlyStats = computeMonthlyStats(clients.filter(c => c.assignedTo === o.id), curMonthKey);
         const portfolio = computeStaffPortfolio(clients, o.id);
@@ -1279,8 +1409,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                 </button>
               </div>
             </div>
-
-            {/* MONTHLY STATS */}
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, letterSpacing: 0.8, marginBottom: 8 }}>📅 THIS MONTH ({fm(curMonthKey)})</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1302,8 +1430,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                 </div>
               </div>
             </div>
-
-            {/* PORTFOLIO */}
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, letterSpacing: 0.8, marginBottom: 8 }}>🏦 PORTFOLIO</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
@@ -1325,8 +1451,6 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
                 </div>
               </div>
             </div>
-
-            {/* DEFAULTERS - Always visible if any */}
             {defaulters.length > 0 && (
               <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, padding: "10px 12px", marginTop: 10 }}>
                 <div onClick={() => setExpandDefaulters(p => ({ ...p, [o.id]: !p[o.id] }))} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", marginBottom: isExpanded ? 10 : 0 }}>
@@ -1388,7 +1512,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
       )}
     </div>
   );
-}
+                             }
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [clients, setClients] = useState([]);
@@ -1431,6 +1555,7 @@ export default function App() {
   const [lastActivity, setLastActivity] = useState(Date.now());
   const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
   const [showTimeoutSettings, setShowTimeoutSettings] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState(null); // NEW
 
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type });
@@ -1545,6 +1670,8 @@ export default function App() {
     return { totalCapital, totalCollectedEver, totalOutstanding, activeClientCount, activeLoanCount, overdueTotal };
   }, [visibleClients]);
 
+  const todayPerformance = useMemo(() => computeTodayPerformance(visibleClients), [visibleClients]);
+
   const monthlyReport = useMemo(() => computeMonthlyReport(clients), [clients]);
 
   const dailyCollectionData = useMemo(() => {
@@ -1600,8 +1727,18 @@ export default function App() {
     };
   };
 
-  const handleAddClient = () => {
-    if (!newClient.name.trim() || !newClient.phone.trim()) return;
+  // NEW: Duplicate detection wrapper
+  const attemptAddClient = () => {
+    if (!newClient.name.trim() || !newClient.phone.trim()) { showToast("Name and phone required", "error"); return; }
+    const dupes = findDuplicates(clients, newClient.name, newClient.phone);
+    if (dupes.length > 0) {
+      setDuplicateWarning({ duplicates: dupes, proceed: () => { doAddClient(); setDuplicateWarning(null); } });
+      return;
+    }
+    doAddClient();
+  };
+
+  const doAddClient = () => {
     saveClients([{ ...newClient, id: generateId("CL"), loans: [], savingsBalance: 0, savingsLogs: [], assignedTo: currentUser?.id, assignedToName: currentUser?.name, createdAt: todayStr }, ...clients]);
     setNewClient({ name: "", phone: "", address: "", idNumber: "", occupation: "", guarantorName: "", guarantorPhone: "", guarantorRelationship: "", guarantorOccupation: "" });
     setShowAddClient(false);
@@ -1774,7 +1911,7 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "13.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "14.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -2019,6 +2156,9 @@ export default function App() {
               </div>
             )}
 
+            {/* NEW: TODAY'S PERFORMANCE for officers */}
+            {!isAdmin && <TodayPerformanceCard perf={todayPerformance} />}
+
             {isAdmin ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
                 <ModernStatCard label="Disbursed" value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
@@ -2028,6 +2168,7 @@ export default function App() {
               </div>
             ) : (
               <>
+                {/* Simplified This Month — just Disbursed + Month Gap */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>📅</div>
@@ -2038,12 +2179,11 @@ export default function App() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <ModernStatCard label="Disbursed" value={fc(stats.totalDisbursed)} icon="💰" gradient="linear-gradient(135deg,#1e40af,#3b82f6)" />
-                    <ModernStatCard label="Collected" value={fc(stats.totalCollected)} icon="📥" gradient="linear-gradient(135deg,#15803d,#22c55e)" />
-                    <ModernStatCard label="Expected" value={fc(stats.totalExpected || 0)} icon="📊" gradient="linear-gradient(135deg,#7c3aed,#a855f7)" />
                     <ModernStatCard label="Month Gap" value={fc(stats.outstanding)} icon="⏳" gradient="linear-gradient(135deg,#b45309,#f59e0b)" danger={stats.outstanding > 0} />
                   </div>
                 </div>
 
+                {/* Simplified Portfolio — just Outstanding + Savings */}
                 <div style={{ marginBottom: 22 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#16a34a,#22c55e)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🏦</div>
@@ -2053,8 +2193,6 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                    <ModernStatCard label="Capital Given" value={fc(officerPortfolio.totalCapital)} icon="🛡️" gradient="linear-gradient(135deg,#0369a1,#0ea5e9)" />
-                    <ModernStatCard label="Total Collected" value={fc(officerPortfolio.totalCollectedEver)} icon="💵" gradient="linear-gradient(135deg,#166534,#16a34a)" />
                     <ModernStatCard label="Outstanding" value={fc(officerPortfolio.totalOutstanding)} icon="⚠️" gradient="linear-gradient(135deg,#991b1b,#dc2626)" danger={officerPortfolio.totalOutstanding > 0} />
                     <ModernStatCard label="Savings" value={fc(stats.totalSavings)} icon="💎" gradient="linear-gradient(135deg,#7e22ce,#a855f7)" />
                   </div>
@@ -2086,6 +2224,7 @@ export default function App() {
             )}
 
             {isAdmin && <ModernPortfolioCard fin={globalFin} expanded={expandFinancials} onToggle={() => setExpandFinancials(!expandFinancials)} />}
+            {isAdmin && <DuplicatesSection clients={clients} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
             {isAdmin && <DefaultersSection clients={clients} monthKey={null} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
             {isAdmin && <DormantSection clients={clients} onSelectClient={id => { setSelectedClientId(id); setView("detail"); }} />}
             {isAdmin && (
@@ -2359,6 +2498,31 @@ export default function App() {
         )}
       </nav>
 
+      {/* DUPLICATE WARNING */}
+      {duplicateWarning && (
+        <Modal title="🚨 Possible Duplicate Client" onClose={() => setDuplicateWarning(null)}>
+          <div style={{ background: "rgba(234,88,12,0.1)", border: "1px solid rgba(234,88,12,0.3)", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: "#fb923c", fontWeight: 700, marginBottom: 4 }}>⚠️ Similar client(s) found</div>
+            <div style={{ fontSize: 11, color: "#9a3412" }}>The name or phone matches existing client(s). Registering may create duplicates.</div>
+          </div>
+          {duplicateWarning.duplicates.map(d => (
+            <div key={d.id} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(234,88,12,0.2)", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#e8f4fd" }}>{d.name}</div>
+                  <div style={{ fontSize: 10, color: "#9a3412", marginTop: 2 }}>{d.phone} · Assigned to {d.assignedToName || "Unknown"}</div>
+                </div>
+                <Badge color="#fb923c" bg="rgba(234,88,12,0.15)">{d.matchType === "both" ? "NAME + PHONE" : d.matchType === "name" ? "SAME NAME" : "SAME PHONE"}</Badge>
+              </div>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button onClick={() => setDuplicateWarning(null)} style={{ flex: 1, background: "rgba(255,255,255,0.06)", border: "none", color: "#8ab4c8", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, minHeight: 44 }}>Cancel</button>
+            <button onClick={duplicateWarning.proceed} style={{ flex: 1, background: "linear-gradient(135deg,#f59e0b,#ea580c)", border: "none", color: "#000", padding: "12px", borderRadius: 10, cursor: "pointer", fontWeight: 800, minHeight: 44 }}>Register Anyway</button>
+          </div>
+        </Modal>
+      )}
+
       {showTimeoutWarning && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,8,20,0.95)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backdropFilter: "blur(10px)" }}>
           <div style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.15), rgba(234,88,12,0.1))", border: "2px solid rgba(245,158,11,0.4)", borderRadius: 20, padding: 24, maxWidth: 380, width: "100%", textAlign: "center", boxShadow: "0 20px 60px rgba(245,158,11,0.3)" }}>
@@ -2400,7 +2564,7 @@ export default function App() {
           <Field label="Guarantor Phone"><input style={IS} value={newClient.guarantorPhone} onChange={e => setNewClient(p => ({ ...p, guarantorPhone: e.target.value }))} /></Field>
           <Field label="Relationship"><input style={IS} value={newClient.guarantorRelationship} onChange={e => setNewClient(p => ({ ...p, guarantorRelationship: e.target.value }))} placeholder="e.g. Spouse, Sibling, Employer" /></Field>
           <Field label="Guarantor Occupation"><input style={IS} value={newClient.guarantorOccupation} onChange={e => setNewClient(p => ({ ...p, guarantorOccupation: e.target.value }))} placeholder="e.g. Civil Servant, Business Owner" /></Field>
-          <button onClick={handleAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, minHeight: 48 }}>✓ Register</button>
+          <button onClick={attemptAddClient} style={{ width: "100%", background: "linear-gradient(135deg,#22c55e,#16a34a)", border: "none", color: "#000", padding: "14px", borderRadius: 12, cursor: "pointer", fontWeight: 800, fontSize: 14, minHeight: 48 }}>✓ Register</button>
         </Modal>
       )}
 
@@ -2530,4 +2694,4 @@ export default function App() {
       )}
     </div>
   );
-              }
+      }
