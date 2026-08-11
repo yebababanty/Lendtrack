@@ -45,19 +45,15 @@ const todayStr = new Date().toISOString().split("T")[0];
 const curMonthKey = todayStr.slice(0, 7);
 const DORMANT_DAYS = 14;
 
-// Normalize phone numbers for comparison
 function normalizePhone(phone) {
   if (!phone) return "";
   return phone.replace(/\D/g, "").replace(/^234/, "0").replace(/^0+/, "0");
 }
-
-// Normalize names for comparison
 function normalizeName(name) {
   if (!name) return "";
   return name.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-// ─── DUPLICATE DETECTION ─────────────────────────────────────────────────────
 function findDuplicates(clients, newName, newPhone, excludeId = null) {
   const normNewName = normalizeName(newName);
   const normNewPhone = normalizePhone(newPhone);
@@ -73,7 +69,6 @@ function findDuplicates(clients, newName, newPhone, excludeId = null) {
   return duplicates;
 }
 
-// Find all suspected duplicate accounts across the entire client base
 function findAllDuplicates(clients) {
   const groups = [];
   const seen = new Set();
@@ -359,11 +354,8 @@ function computeStaffDefaulters(clients, officerId) {
       if (overdueSlots.length < 2) return;
       const totalOwed = overdueSlots.reduce((sum, s) => sum + (s.payment - (s.paidAmount || 0)), 0);
       defaulters.push({
-        clientId: c.id,
-        clientName: c.name,
-        phone: c.phone,
-        daysOverdue: overdueSlots.length,
-        totalOwed,
+        clientId: c.id, clientName: c.name, phone: c.phone,
+        daysOverdue: overdueSlots.length, totalOwed,
         lastDueDate: overdueSlots[overdueSlots.length - 1]?.dueDate,
         firstOverdueDate: overdueSlots[0]?.dueDate
       });
@@ -372,41 +364,91 @@ function computeStaffDefaulters(clients, officerId) {
   return defaulters.sort((a, b) => b.daysOverdue - a.daysOverdue);
 }
 
-// ─── TODAY'S PERFORMANCE (Officer daily metrics) ─────────────────────────────
+// ─── UPDATED: TODAY'S PERFORMANCE (Separated) ────────────────────────────────
 function computeTodayPerformance(clients) {
-  let expected = 0, loanCollected = 0, savingsDeposited = 0;
-  const today = new Date();
+  let loanExpected = 0, loanCollected = 0, savingsDeposited = 0;
+  const unpaidClientsList = [];
   clients.forEach(c => {
-    // Expected today from active loans
     (c.loans || []).forEach(l => {
       if (l.status !== "active") return;
       (l.schedule || []).forEach(s => {
-        if (s.dueDate === todayStr && !s.paid) {
-          expected += (s.payment - (s.paidAmount || 0));
+        if (s.dueDate === todayStr) {
+          const expected = s.payment;
+          const paid = s.paidAmount || 0;
+          loanExpected += expected;
+          if (!s.paid && (expected - paid) > 0) {
+            unpaidClientsList.push({
+              clientId: c.id, clientName: c.name, phone: c.phone,
+              expected, paid, gap: expected - paid
+            });
+          }
         }
-      });
-      // Loan payments collected today (from paymentLog dates)
-      (l.schedule || []).forEach(s => {
+        // Loan payments actually collected today
         (s.paymentLog || []).forEach(pl => {
           if (pl.date === todayStr) loanCollected += pl.amount || 0;
         });
       });
     });
-    // Savings deposits today
     (c.savingsLogs || []).forEach(log => {
       if (log.date === todayStr && log.type === "deposit") {
         savingsDeposited += log.amount || 0;
       }
     });
   });
-  const totalCollected = loanCollected + savingsDeposited;
+  const loanGap = Math.max(0, loanExpected - loanCollected);
   return {
-    expected,
+    loanExpected,
     loanCollected,
+    loanGap,
     savingsDeposited,
-    totalCollected,
-    gap: Math.max(0, expected - loanCollected)
+    totalCollected: loanCollected + savingsDeposited,
+    unpaidClientsList
   };
+}
+
+// ─── NEW: DAILY HISTORY (Auto-computed from all data) ────────────────────────
+function computeDailyHistory(clients, users) {
+  const map = {};
+  clients.forEach(c => {
+    const officer = c.assignedToName || "Unassigned";
+    (c.loans || []).forEach(l => {
+      (l.schedule || []).forEach(s => {
+        // Loan expected on each date
+        if (s.dueDate) {
+          if (!map[s.dueDate]) map[s.dueDate] = { date: s.dueDate, loanExpected: 0, loanCollected: 0, savingsDeposited: 0, savingsWithdrawn: 0, byOfficer: {} };
+          if (l.status === "active" || !l.status) {
+            map[s.dueDate].loanExpected += s.payment || 0;
+            if (!map[s.dueDate].byOfficer[officer]) map[s.dueDate].byOfficer[officer] = { loanExpected: 0, loanCollected: 0, savingsDeposited: 0 };
+            map[s.dueDate].byOfficer[officer].loanExpected += s.payment || 0;
+          }
+        }
+        // Loan actually collected
+        (s.paymentLog || []).forEach(pl => {
+          if (!pl.date) return;
+          if (!map[pl.date]) map[pl.date] = { date: pl.date, loanExpected: 0, loanCollected: 0, savingsDeposited: 0, savingsWithdrawn: 0, byOfficer: {} };
+          map[pl.date].loanCollected += pl.amount || 0;
+          const payOfficer = pl.by || officer;
+          if (!map[pl.date].byOfficer[payOfficer]) map[pl.date].byOfficer[payOfficer] = { loanExpected: 0, loanCollected: 0, savingsDeposited: 0 };
+          map[pl.date].byOfficer[payOfficer].loanCollected += pl.amount || 0;
+        });
+      });
+    });
+    (c.savingsLogs || []).forEach(log => {
+      if (!log.date) return;
+      if (!map[log.date]) map[log.date] = { date: log.date, loanExpected: 0, loanCollected: 0, savingsDeposited: 0, savingsWithdrawn: 0, byOfficer: {} };
+      const savOfficer = log.recordedBy || officer;
+      if (!map[log.date].byOfficer[savOfficer]) map[log.date].byOfficer[savOfficer] = { loanExpected: 0, loanCollected: 0, savingsDeposited: 0 };
+      if (log.type === "deposit") {
+        map[log.date].savingsDeposited += log.amount || 0;
+        map[log.date].byOfficer[savOfficer].savingsDeposited += log.amount || 0;
+      } else if (log.type === "withdraw") {
+        map[log.date].savingsWithdrawn += log.amount || 0;
+      }
+    });
+  });
+  return Object.values(map)
+    .map(d => ({ ...d, totalCollected: d.loanCollected + d.savingsDeposited, loanGap: Math.max(0, d.loanExpected - d.loanCollected) }))
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function computeFinancials(clients) {
@@ -602,7 +644,6 @@ function getClientTransactions(client) {
 const DEFAULT_USERS = [
   { id: "admin_001", username: "Yebaba", password: "Go5win619$", role: "admin", name: "Admin", createdAt: "2026-04-21", active: true }
 ];
-
 const Icon = ({ name, size = 16 }) => {
   const icons = {
     plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>,
@@ -833,7 +874,6 @@ function DormantSection({ clients, onSelectClient }) {
   );
 }
 
-// ─── NEW: DUPLICATE CLIENTS ALERT ────────────────────────────────────────────
 function DuplicatesSection({ clients, onSelectClient }) {
   const [expanded, setExpanded] = useState(false);
   const dupeGroups = useMemo(() => findAllDuplicates(clients), [clients]);
@@ -874,9 +914,10 @@ function DuplicatesSection({ clients, onSelectClient }) {
   );
 }
 
-// ─── NEW: TODAY'S PERFORMANCE CARD (Officer) ─────────────────────────────────
+// ─── UPDATED: TODAY'S PERFORMANCE CARD (Loan/Savings separated) ──────────────
 function TodayPerformanceCard({ perf }) {
-  const rate = perf.expected > 0 ? (perf.loanCollected / perf.expected) * 100 : 0;
+  const [showUnpaid, setShowUnpaid] = useState(false);
+  const rate = perf.loanExpected > 0 ? (perf.loanCollected / perf.loanExpected) * 100 : 0;
   const rateColor = rate >= 80 ? "#22c55e" : rate >= 50 ? "#f59e0b" : "#ef4444";
   return (
     <div style={{ background: "linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.06))", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 18, padding: 18, marginBottom: 20, boxShadow: "0 8px 32px rgba(34,197,94,0.15)" }}>
@@ -887,39 +928,185 @@ function TodayPerformanceCard({ perf }) {
           <div style={{ fontSize: 10, color: "#5a7a90" }}>{fd(todayStr)} — Live tracking</div>
         </div>
       </div>
+
+      {/* GRAND TOTAL */}
       <div style={{ textAlign: "center", padding: "8px 0 14px", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-        <div style={{ fontSize: 28, fontWeight: 900, color: "#4ade80", fontFamily: "'Courier New',monospace", letterSpacing: -1 }}>{fc(perf.totalCollected)}</div>
-        <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 4 }}>Total received today (loans + savings)</div>
+        <div style={{ fontSize: 10, color: "#5a7a90", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>Total Collected Today</div>
+        <div style={{ fontSize: 30, fontWeight: 900, color: "#4ade80", fontFamily: "'Courier New',monospace", letterSpacing: -1 }}>{fc(perf.totalCollected)}</div>
+        <div style={{ fontSize: 10, color: "#5a7a90", marginTop: 6 }}>Loans + Savings combined</div>
       </div>
-      <div style={{ padding: "14px 0" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-          <span style={{ fontSize: 10, color: "#5a7a90", fontWeight: 600 }}>Loan Collection Rate</span>
-          <span style={{ fontSize: 12, color: rateColor, fontWeight: 800, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}%</span>
+
+      {/* LOAN SECTION */}
+      <div style={{ marginTop: 14, marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: "#60a5fa", fontWeight: 700, letterSpacing: 0.8, marginBottom: 8, textTransform: "uppercase" }}>💰 Loan Repayment</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 8 }}>
+          <div style={{ padding: 10, background: "rgba(96,165,250,0.08)", borderRadius: 9, border: "1px solid rgba(96,165,250,0.2)", textAlign: "center" }}>
+            <div style={{ fontSize: 8, color: "#5a7a90" }}>EXPECTED</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.loanExpected)}</div>
+          </div>
+          <div style={{ padding: 10, background: "rgba(74,222,128,0.08)", borderRadius: 9, border: "1px solid rgba(74,222,128,0.2)", textAlign: "center" }}>
+            <div style={{ fontSize: 8, color: "#5a7a90" }}>PAID</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.loanCollected)}</div>
+          </div>
+          <div style={{ padding: 10, background: perf.loanGap > 0 ? "rgba(248,113,113,0.08)" : "rgba(74,222,128,0.08)", borderRadius: 9, border: `1px solid ${perf.loanGap > 0 ? "rgba(248,113,113,0.2)" : "rgba(74,222,128,0.2)"}`, textAlign: "center" }}>
+            <div style={{ fontSize: 8, color: "#5a7a90" }}>GAP</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: perf.loanGap > 0 ? "#f87171" : "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.loanGap)}</div>
+          </div>
         </div>
-        <div style={{ height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: rate >= 80 ? "linear-gradient(90deg,#22c55e,#4ade80)" : rate >= 50 ? "linear-gradient(90deg,#d97706,#f59e0b)" : "linear-gradient(90deg,#dc2626,#f87171)", borderRadius: 4 }} />
+        <div style={{ height: 5, background: "rgba(255,255,255,0.05)", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: `linear-gradient(90deg,${rateColor},${rateColor}cc)`, borderRadius: 4 }} />
         </div>
+        <div style={{ textAlign: "right", fontSize: 10, color: rateColor, fontWeight: 700, marginTop: 4, fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}% collected</div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-        <div style={{ padding: 10, background: "rgba(96,165,250,0.06)", borderRadius: 9, border: "1px solid rgba(96,165,250,0.15)", textAlign: "center" }}>
-          <div style={{ fontSize: 8, color: "#5a7a90" }}>EXPECTED</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.expected)}</div>
+
+      {/* SAVINGS */}
+      <div style={{ padding: "10px 12px", background: "rgba(167,139,250,0.1)", border: "1px solid rgba(167,139,250,0.25)", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16 }}>💎</span>
+          <div>
+            <div style={{ fontSize: 11, color: "#a78bfa", fontWeight: 700 }}>Savings Today</div>
+            <div style={{ fontSize: 9, color: "#5a7a90" }}>Deposits from clients</div>
+          </div>
         </div>
-        <div style={{ padding: 10, background: "rgba(74,222,128,0.06)", borderRadius: 9, border: "1px solid rgba(74,222,128,0.15)", textAlign: "center" }}>
-          <div style={{ fontSize: 8, color: "#5a7a90" }}>LOAN PAID</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.loanCollected)}</div>
-        </div>
-        <div style={{ padding: 10, background: perf.gap > 0 ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)", borderRadius: 9, border: `1px solid ${perf.gap > 0 ? "rgba(248,113,113,0.15)" : "rgba(74,222,128,0.15)"}`, textAlign: "center" }}>
-          <div style={{ fontSize: 8, color: "#5a7a90" }}>GAP</div>
-          <div style={{ fontSize: 11, fontWeight: 800, color: perf.gap > 0 ? "#f87171" : "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 3 }}>{fc(perf.gap)}</div>
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: "#a78bfa", fontFamily: "'Courier New',monospace" }}>{fc(perf.savingsDeposited)}</div>
       </div>
-      {perf.savingsDeposited > 0 && (
-        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 9, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 10, color: "#a78bfa", fontWeight: 700 }}>💎 Savings deposits today</div>
-          <div style={{ fontSize: 12, fontWeight: 800, color: "#a78bfa", fontFamily: "'Courier New',monospace" }}>{fc(perf.savingsDeposited)}</div>
+
+      {/* UNPAID CLIENTS */}
+      {perf.unpaidClientsList && perf.unpaidClientsList.length > 0 && (
+        <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 10, padding: "10px 12px" }}>
+          <div onClick={() => setShowUnpaid(!showUnpaid)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#f87171" }}>
+              ⚠️ {perf.unpaidClientsList.length} Client{perf.unpaidClientsList.length !== 1 ? "s" : ""} yet to pay
+            </div>
+            <div style={{ fontSize: 10, color: "#7a3a3a" }}>{showUnpaid ? "▲" : "▼"}</div>
+          </div>
+          {showUnpaid && (
+            <div style={{ marginTop: 10 }}>
+              {perf.unpaidClientsList.map(u => (
+                <div key={u.clientId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#e8f4fd" }}>{u.clientName}</div>
+                    <div style={{ fontSize: 9, color: "#5a7a90" }}>{u.phone}</div>
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#f87171", fontFamily: "'Courier New',monospace" }}>{fc(u.gap)}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── NEW: DAILY HISTORY COMPONENT (for Accountant) ───────────────────────────
+function DailyHistoryView({ history }) {
+  const [expandedDay, setExpandedDay] = useState(null);
+  const [filter, setFilter] = useState("week");
+  
+  const filtered = useMemo(() => {
+    if (filter === "all") return history;
+    const today = new Date();
+    return history.filter(d => {
+      const dd = new Date(d.date);
+      const diff = (today - dd) / (86400000);
+      if (filter === "week") return diff >= 0 && diff <= 7;
+      if (filter === "month") return d.date.slice(0, 7) === curMonthKey;
+      return true;
+    });
+  }, [history, filter]);
+  
+  if (history.length === 0) return null;
+  
+  return (
+    <div style={{ background: "linear-gradient(135deg, rgba(16,30,50,0.7), rgba(10,20,40,0.5))", border: "1px solid rgba(100,180,255,0.1)", borderRadius: 18, padding: 18, marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#7c3aed,#a855f7)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="history" size={15} /></div>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#c4b5fd" }}>Daily Collection History</div>
+          <div style={{ fontSize: 10, color: "#5a7a90" }}>Complete record with breakdowns</div>
+        </div>
+      </div>
+      
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, padding: 4, background: "rgba(0,0,0,0.25)", borderRadius: 10 }}>
+        {["week", "month", "all"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{ flex: 1, background: filter === f ? "linear-gradient(135deg,#7c3aed,#a855f7)" : "transparent", border: "none", color: filter === f ? "#fff" : "#5a7a90", padding: "10px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 11, textTransform: "capitalize", minHeight: 40 }}>{f}</button>
+        ))}
+      </div>
+      
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 30, color: "#3a5a70" }}>No history</div>
+      ) : filtered.map(day => {
+        const isExpanded = expandedDay === day.date;
+        const isToday = day.date === todayStr;
+        const rate = day.loanExpected > 0 ? (day.loanCollected / day.loanExpected) * 100 : 0;
+        const rateColor = rate >= 80 ? "#22c55e" : rate >= 50 ? "#f59e0b" : "#ef4444";
+        return (
+          <div key={day.date} style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${isToday ? "rgba(74,222,128,0.25)" : "rgba(100,180,255,0.08)"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+            <div onClick={() => setExpandedDay(isExpanded ? null : day.date)} style={{ cursor: "pointer" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: "#e8f4fd" }}>{fd(day.date)}</span>
+                    {isToday && <Badge color="#000" bg="#4ade80">TODAY</Badge>}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#5a7a90", marginTop: 2 }}>{new Date(day.date).toLocaleDateString("en-NG", { weekday: "long" })}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace" }}>{fc(day.totalCollected)}</div>
+                  <div style={{ fontSize: 9, color: "#5a7a90" }}>Total</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                <div style={{ background: "rgba(96,165,250,0.06)", borderRadius: 7, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 8, color: "#5a7a90" }}>LOAN EXPECT</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#60a5fa", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{fc(day.loanExpected)}</div>
+                </div>
+                <div style={{ background: "rgba(74,222,128,0.06)", borderRadius: 7, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 8, color: "#5a7a90" }}>LOAN PAID</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#4ade80", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{fc(day.loanCollected)}</div>
+                </div>
+                <div style={{ background: "rgba(167,139,250,0.06)", borderRadius: 7, padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 8, color: "#5a7a90" }}>SAVINGS</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#a78bfa", fontFamily: "'Courier New',monospace", marginTop: 2 }}>{fc(day.savingsDeposited)}</div>
+                </div>
+              </div>
+              {day.loanExpected > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${Math.min(rate, 100)}%`, background: `linear-gradient(90deg,${rateColor},${rateColor}cc)`, borderRadius: 3 }} />
+                  </div>
+                  <div style={{ fontSize: 9, color: rateColor, fontWeight: 700, marginTop: 3, textAlign: "right", fontFamily: "'Courier New',monospace" }}>{rate.toFixed(1)}% loan rate</div>
+                </div>
+              )}
+            </div>
+            {isExpanded && Object.keys(day.byOfficer || {}).length > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{ fontSize: 10, color: "#c4b5fd", fontWeight: 700, marginBottom: 8 }}>👥 BREAKDOWN BY OFFICER</div>
+                {Object.entries(day.byOfficer).map(([officer, data]) => (
+                  <div key={officer} style={{ background: "rgba(255,255,255,0.02)", borderRadius: 8, padding: "8px 10px", marginBottom: 5 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#e8f4fd", marginBottom: 4 }}>{officer}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
+                      <div>
+                        <span style={{ color: "#5a7a90" }}>Expected: </span>
+                        <span style={{ color: "#60a5fa", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(data.loanExpected || 0)}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#5a7a90" }}>Loan: </span>
+                        <span style={{ color: "#4ade80", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(data.loanCollected || 0)}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#5a7a90" }}>Savings: </span>
+                        <span style={{ color: "#a78bfa", fontWeight: 700, fontFamily: "'Courier New',monospace" }}>{fc(data.savingsDeposited || 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1512,7 +1699,7 @@ function StaffPanel({ users, clients, pendingLoans, currentUser, onUpdateUsers, 
       )}
     </div>
   );
-                             }
+    }
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [clients, setClients] = useState([]);
@@ -1555,7 +1742,7 @@ export default function App() {
   const [lastActivity, setLastActivity] = useState(Date.now());
   const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
   const [showTimeoutSettings, setShowTimeoutSettings] = useState(false);
-  const [duplicateWarning, setDuplicateWarning] = useState(null); // NEW
+  const [duplicateWarning, setDuplicateWarning] = useState(null);
 
   const showToast = useCallback((msg, type = "success") => {
     setToast({ msg, type });
@@ -1671,7 +1858,7 @@ export default function App() {
   }, [visibleClients]);
 
   const todayPerformance = useMemo(() => computeTodayPerformance(visibleClients), [visibleClients]);
-
+  const dailyHistory = useMemo(() => computeDailyHistory(isAdmin ? clients : visibleClients, users), [clients, visibleClients, users, isAdmin]);
   const monthlyReport = useMemo(() => computeMonthlyReport(clients), [clients]);
 
   const dailyCollectionData = useMemo(() => {
@@ -1727,7 +1914,6 @@ export default function App() {
     };
   };
 
-  // NEW: Duplicate detection wrapper
   const attemptAddClient = () => {
     if (!newClient.name.trim() || !newClient.phone.trim()) { showToast("Name and phone required", "error"); return; }
     const dupes = findDuplicates(clients, newClient.name, newClient.phone);
@@ -1911,7 +2097,7 @@ export default function App() {
   };
 
   const exportData = () => {
-    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "14.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ clients, users, pendingLoans, v: "15.0", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1979,6 +2165,10 @@ export default function App() {
                 <button onClick={() => setAdminMode("admin")} style={{ background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)", color: "#f59e0b", padding: "8px 14px", borderRadius: 9, cursor: "pointer", fontWeight: 700, fontSize: 12, minHeight: 40 }}>👑 Admin</button>
               </div>
             </div>
+            
+            {/* Daily History (Accountant view) */}
+            <DailyHistoryView history={dailyHistory} />
+            
             {(() => {
               const todayData = dailyCollectionData.find(d => d.date === todayStr) || { expected: 0, collected: 0, installments: [] };
               const gap = Math.max(0, todayData.expected - todayData.collected);
@@ -2156,7 +2346,6 @@ export default function App() {
               </div>
             )}
 
-            {/* NEW: TODAY'S PERFORMANCE for officers */}
             {!isAdmin && <TodayPerformanceCard perf={todayPerformance} />}
 
             {isAdmin ? (
@@ -2168,7 +2357,6 @@ export default function App() {
               </div>
             ) : (
               <>
-                {/* Simplified This Month — just Disbursed + Month Gap */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>📅</div>
@@ -2183,7 +2371,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Simplified Portfolio — just Outstanding + Savings */}
                 <div style={{ marginBottom: 22 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "0 4px" }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg,#16a34a,#22c55e)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🏦</div>
@@ -2498,7 +2685,6 @@ export default function App() {
         )}
       </nav>
 
-      {/* DUPLICATE WARNING */}
       {duplicateWarning && (
         <Modal title="🚨 Possible Duplicate Client" onClose={() => setDuplicateWarning(null)}>
           <div style={{ background: "rgba(234,88,12,0.1)", border: "1px solid rgba(234,88,12,0.3)", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
